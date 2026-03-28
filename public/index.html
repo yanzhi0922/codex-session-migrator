@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Codex Session Migrator</title>
+    <meta name="description" content="Inspect, migrate, back up, and restore Codex sessions across model providers.">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Codex Session Migrator</p>
+          <h1>Move Codex history across providers without breaking your archive.</h1>
+          <p class="hero-text">
+            A local-first migration console for Codex Desktop session stores. Inspect providers, batch-retag sessions,
+            create backup snapshots, and restore safely from a manifest-backed history.
+          </p>
+        </div>
+        <div class="hero-panel">
+          <div class="hero-stat">
+            <span class="hero-stat-label">Sessions Directory</span>
+            <strong id="sessionsDir">Loading...</strong>
+          </div>
+          <div class="hero-stat">
+            <span class="hero-stat-label">Latest Session</span>
+            <strong id="latestSessionAt">Loading...</strong>
+          </div>
+          <div class="hero-actions">
+            <button id="refreshButton" class="button button-primary">Refresh</button>
+            <button id="selectPageButton" class="button button-secondary">Select Page</button>
+            <button id="clearSelectionButton" class="button button-ghost">Clear</button>
+          </div>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="panel stats-panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Overview</p>
+              <h2>Current footprint</h2>
+            </div>
+          </div>
+          <div id="statsGrid" class="stats-grid"></div>
+          <div id="providerChips" class="provider-chips"></div>
+        </section>
+
+        <section class="panel controls-panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Selection</p>
+              <h2>Filter and queue a migration</h2>
+            </div>
+          </div>
+
+          <form id="filterForm" class="filters">
+            <label class="field">
+              <span>Provider</span>
+              <select id="providerFilter" name="provider"></select>
+            </label>
+            <label class="field field-grow">
+              <span>Search</span>
+              <input id="searchInput" name="search" type="search" placeholder="Search by path, provider, cwd, or first prompt">
+            </label>
+            <label class="field">
+              <span>Page Size</span>
+              <select id="limitFilter" name="limit">
+                <option value="25">25</option>
+                <option value="50" selected>50</option>
+                <option value="100">100</option>
+                <option value="250">250</option>
+              </select>
+            </label>
+            <button class="button button-primary align-end" type="submit">Apply</button>
+          </form>
+
+          <div class="migration-bar">
+            <label class="field field-grow">
+              <span>Target Provider</span>
+              <input id="targetProviderInput" type="text" placeholder="crs / openai / fizzlycode / custom-provider">
+            </label>
+            <div class="migration-actions">
+              <button id="previewButton" class="button button-secondary" type="button">Preview</button>
+              <button id="runButton" class="button button-primary" type="button">Run Migration</button>
+            </div>
+          </div>
+
+          <div class="selection-summary">
+            <div>
+              <span class="summary-label">Selection mode</span>
+              <strong id="selectionMode">Current filters</strong>
+            </div>
+            <div>
+              <span class="summary-label">Selected files</span>
+              <strong id="selectedCount">0</strong>
+            </div>
+            <div>
+              <span class="summary-label">Matching total</span>
+              <strong id="matchingCount">0</strong>
+            </div>
+          </div>
+
+          <div id="previewPanel" class="preview-panel hidden"></div>
+          <div id="messagePanel" class="message-panel hidden"></div>
+        </section>
+
+        <section class="panel sessions-panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Sessions</p>
+              <h2>Provider-tagged history</h2>
+            </div>
+            <div class="pagination">
+              <button id="prevPageButton" class="button button-ghost" type="button">Previous</button>
+              <span id="pageStatus">Page 1</span>
+              <button id="nextPageButton" class="button button-ghost" type="button">Next</button>
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table class="session-table">
+              <thead>
+                <tr>
+                  <th class="cell-checkbox">
+                    <input id="togglePageSelection" type="checkbox" aria-label="Select all rows on page">
+                  </th>
+                  <th>Provider</th>
+                  <th>When</th>
+                  <th>Relative Path</th>
+                  <th>Workspace</th>
+                  <th>Prompt Preview</th>
+                </tr>
+              </thead>
+              <tbody id="sessionsTableBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="split-grid">
+          <section class="panel backups-panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Backups</p>
+                <h2>Rollback points</h2>
+              </div>
+            </div>
+            <div id="backupsList" class="stack-list"></div>
+          </section>
+
+          <section class="panel doctor-panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Doctor</p>
+                <h2>Storage health</h2>
+              </div>
+            </div>
+            <div id="doctorSummary" class="doctor-summary"></div>
+            <div id="doctorIssues" class="stack-list compact"></div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <template id="statCardTemplate">
+      <article class="stat-card">
+        <span class="stat-label"></span>
+        <strong class="stat-value"></strong>
+      </article>
+    </template>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
