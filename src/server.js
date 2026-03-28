@@ -43,7 +43,7 @@ function serveStaticAsset(req, res) {
     'Content-Type': getMimeType(absolutePath),
     'Cache-Control': absolutePath.endsWith('.html') ? 'no-store' : 'public, max-age=600'
   });
-  fs.createReadStream(absolutePath).pipe(res);
+  res.end(fs.readFileSync(absolutePath));
 }
 
 function createAppServer(options = {}) {
@@ -67,22 +67,40 @@ function createAppServer(options = {}) {
 function startServer(options = {}) {
   const host = options.host || '127.0.0.1';
   const rawPort = options.port !== undefined ? options.port : (process.env.PORT || 5730);
-  const port = Number(rawPort);
+  const basePort = Number(rawPort);
+  const maxAttempts = Math.max(1, Number(options.maxPortAttempts) || 10);
   const app = createAppServer(options);
 
-  return new Promise((resolve, reject) => {
-    app.server.once('error', reject);
-    app.server.listen(port, host, () => {
-      app.server.off('error', reject);
-      resolve({
-        host,
-        port,
-        sessionsDir: app.sessionsDir,
-        server: app.server,
-        url: `http://${host}:${port}`
+  function tryListen(offset = 0) {
+    const port = basePort + offset;
+
+    return new Promise((resolve, reject) => {
+      const handleError = (error) => {
+        app.server.off('error', handleError);
+
+        if (error && error.code === 'EADDRINUSE' && offset + 1 < maxAttempts) {
+          resolve(tryListen(offset + 1));
+          return;
+        }
+
+        reject(error);
+      };
+
+      app.server.once('error', handleError);
+      app.server.listen(port, host, () => {
+        app.server.off('error', handleError);
+        resolve({
+          host,
+          port,
+          sessionsDir: app.sessionsDir,
+          server: app.server,
+          url: `http://${host}:${port}`
+        });
       });
     });
-  });
+  }
+
+  return tryListen(0);
 }
 
 module.exports = {

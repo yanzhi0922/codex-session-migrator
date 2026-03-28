@@ -3,13 +3,40 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { formatBytes, formatTimestamp } = require('./format');
+const { formatBytesDisplay, formatDisplayTimestamp } = require('./format');
+const { createTranslator } = require('./i18n');
 const { listBackupSnapshots, BACKUP_ROOT_NAME } = require('./backup-store');
+const { getIndexHealth } = require('./session-indexes');
 
 const DEFAULT_SESSIONS_DIR = path.join(os.homedir(), '.codex', 'sessions');
 const MAX_FIRST_LINE_BYTES = 256 * 1024;
 const MAX_PREVIEW_BYTES = 1024 * 1024;
+const MAX_RECENT_PROMPTS = 3;
+const MAX_DETAIL_PROMPTS = 5;
+const MAX_RECENT_PROMPT_BYTES = 2 * 1024 * 1024;
 const PROVIDER_PATTERN = /^[a-zA-Z0-9._-]{1,128}$/;
+const STRIP_BLOCK_TAGS = [
+  'environment_context',
+  'turn_aborted',
+  'INSTRUCTIONS',
+  'app-context',
+  'skills_instructions',
+  'plugins_instructions',
+  'collaboration_mode',
+  'permissions instructions',
+  'subagent_notification'
+];
+
+function resolveTranslator(options = {}) {
+  if (typeof options.t === 'function') {
+    return {
+      locale: options.locale || 'en',
+      t: options.t
+    };
+  }
+
+  return createTranslator(options.locale);
+}
 
 function getSessionsDir(cliDir) {
   return path.resolve(cliDir || process.env.CODEX_SESSIONS_DIR || DEFAULT_SESSIONS_DIR);
@@ -36,6 +63,139 @@ function readChunk(filePath, maxBytes) {
   }
 }
 
+function readTailChunk(filePath, maxBytes) {
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    const stat = fs.fstatSync(fd);
+    const size = Math.min(stat.size, maxBytes);
+    const start = Math.max(0, stat.size - size);
+    const buffer = Buffer.alloc(size);
+    const bytesRead = fs.readSync(fd, buffer, 0, size, start);
+
+    return {
+      chunk: buffer.slice(0, bytesRead).toString('utf8'),
+      truncatedStart: start > 0
+    };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function tryParseJsonLine(line) {
+  try {
+    return JSON.parse(line);
+  } catch {
+    return null;
+  }
+}
+
+function extractUserInputText(record) {
+  if (!record || typeof record !== 'object') {
+    return null;
+  }
+
+  let content = null;
+  if (
+    record.type === 'response_item' &&
+    record.payload &&
+    record.payload.role === 'user' &&
+    Array.isArray(record.payload.content)
+  ) {
+    content = record.payload.content;
+  } else if (
+    record.type === 'message' &&
+    record.role === 'user' &&
+    Array.isArray(record.content)
+  ) {
+    content = record.content;
+  }
+
+  if (!content) {
+    return null;
+  }
+
+  const parts = content
+    .filter((item) => item && item.type === 'input_text' && typeof item.text === 'string')
+    .map((item) => item.text)
+    .filter(Boolean);
+
+  return parts.length ? parts.join('\n\n') : null;
+}
+
+function stripNoiseBlocks(text) {
+  let cleaned = String(text || '');
+
+  for (const tag of STRIP_BLOCK_TAGS) {
+    const escapedTag = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    cleaned = cleaned.replace(new RegExp(`<${escapedTag}>[\\s\\S]*?<\\/${escapedTag}>`, 'gi'), '');
+  }
+
+  cleaned = cleaned.replace(/^\s*# AGENTS\.md instructions[^\n]*\n?/i, '');
+  cleaned = cleaned.replace(/^\s*#\s*Developer Instructions[^\n]*\n?/i, '');
+  cleaned = cleaned.replace(/^\s*<environment_context\s*\/>\s*/gi, '');
+
+  return cleaned;
+}
+
+function focusUsefulPromptSection(text) {
+  const cleaned = String(text || '');
+  const requestMarker = cleaned.match(/(?:^|\n)\s*(?:#{1,6}\s*)?My request for Codex:\s*/i);
+
+  if (requestMarker) {
+    return cleaned.slice(requestMarker.index + requestMarker[0].length);
+  }
+
+  return cleaned;
+}
+
+function stripTrailingUiArtifacts(text) {
+  let cleaned = String(text || '');
+
+  cleaned = cleaned.replace(/\n{2,}\d+\s+files?\s+changed[\s\S]*$/i, '');
+  cleaned = cleaned.replace(/\n{2,}Review(?:\n[^\n]+){1,12}\s*$/i, '');
+
+  return cleaned;
+}
+
+function redactSensitivePromptText(text) {
+  return String(text || '')
+    .replace(/\bsk-[A-Za-z0-9_-]{16,}\b/g, '[redacted-key]')
+    .replace(/\b(?:ghp|gho|ghu|github_pat)_[A-Za-z0-9_]{16,}\b/g, '[redacted-key]');
+}
+
+function sanitizeUserPrompt(text) {
+  let cleaned = stripNoiseBlocks(String(text || '').replace(/\r\n?/g, '\n'));
+  cleaned = focusUsefulPromptSection(cleaned);
+  cleaned = stripTrailingUiArtifacts(cleaned);
+  cleaned = redactSensitivePromptText(cleaned);
+  cleaned = cleaned
+    .replace(/^\s+|\s+$/g, '')
+    .replace(/\n{3,}/g, '\n\n');
+
+  if (!cleaned) {
+    return null;
+  }
+
+  if (/^# AGENTS\.md instructions\b/i.test(cleaned)) {
+    return null;
+  }
+
+  if (/^(A skill is a set of local instructions|## Skills|### Available skills)\b/i.test(cleaned)) {
+    return null;
+  }
+
+  return cleaned;
+}
+
+function summarizePrompt(text, maxLength = 220) {
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return null;
+  }
+
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 3)}...` : normalized;
+}
+
 function parseFirstLine(filePath) {
   try {
     const chunk = readChunk(filePath, MAX_FIRST_LINE_BYTES);
@@ -55,43 +215,49 @@ function parseFirstLine(filePath) {
   }
 }
 
-function extractFirstUserMessage(filePath) {
+function extractRecentUserPrompts(filePath, options = {}) {
   try {
-    const chunk = readChunk(filePath, MAX_PREVIEW_BYTES);
+    const limit = Math.max(1, Number(options.limit) || MAX_RECENT_PROMPTS);
+    const { chunk, truncatedStart } = readTailChunk(
+      filePath,
+      options.maxBytes || MAX_RECENT_PROMPT_BYTES
+    );
     const lines = chunk.split(/\r?\n/);
+    const prompts = [];
+    const seenPrompts = new Set();
 
-    for (const line of lines) {
-      if (!line.trim()) {
+    if (truncatedStart && lines.length) {
+      lines.shift();
+    }
+
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const line = lines[index].trim();
+      if (!line) {
         continue;
       }
 
-      let record;
-      try {
-        record = JSON.parse(line);
-      } catch {
+      const record = tryParseJsonLine(line);
+      if (!record) {
         continue;
       }
 
-      const payload = record && record.payload;
-      if (record.type !== 'response_item' || !payload || payload.role !== 'user' || !Array.isArray(payload.content)) {
-        continue;
+      const rawPrompt = extractUserInputText(record);
+      const cleanedPrompt = sanitizeUserPrompt(rawPrompt);
+
+      if (cleanedPrompt && !seenPrompts.has(cleanedPrompt)) {
+        seenPrompts.add(cleanedPrompt);
+        prompts.push(cleanedPrompt);
       }
 
-      const parts = payload.content
-        .filter((item) => item && item.type === 'input_text' && typeof item.text === 'string')
-        .map((item) => item.text.trim())
-        .filter(Boolean);
-
-      if (parts.length) {
-        const preview = parts.join(' ').replace(/\s+/g, ' ').trim();
-        return preview.length > 220 ? `${preview.slice(0, 217)}...` : preview;
+      if (prompts.length >= limit) {
+        break;
       }
     }
-  } catch {
-    return null;
-  }
 
-  return null;
+    return prompts;
+  } catch {
+    return [];
+  }
 }
 
 function normalizeSessionRecord(filePath, sessionsDir, meta, options = {}) {
@@ -99,7 +265,11 @@ function normalizeSessionRecord(filePath, sessionsDir, meta, options = {}) {
   const relativePath = path.relative(sessionsDir, filePath);
   const provider = meta.model_provider || 'unknown';
   const timestamp = meta.timestamp || '';
-  const preview = options.includePreview ? extractFirstUserMessage(filePath) : null;
+  const recentPrompts = options.includePreview
+    ? extractRecentUserPrompts(filePath, { limit: options.previewPromptLimit || MAX_RECENT_PROMPTS })
+    : [];
+  const preview = recentPrompts.length ? summarizePrompt(recentPrompts[0]) : null;
+  const locale = options.locale || 'en';
 
   return {
     id: meta.id || relativePath,
@@ -107,13 +277,14 @@ function normalizeSessionRecord(filePath, sessionsDir, meta, options = {}) {
     relativePath,
     provider,
     timestamp,
-    timestampDisplay: formatTimestamp(timestamp),
+    timestampDisplay: formatDisplayTimestamp(timestamp, locale),
     cwd: meta.cwd || '',
     originator: meta.originator || '',
     cliVersion: meta.cli_version || '',
     preview,
+    recentPrompts,
     size: stat ? stat.size : 0,
-    sizeDisplay: formatBytes(stat ? stat.size : 0)
+    sizeDisplay: formatBytesDisplay(stat ? stat.size : 0, locale)
   };
 }
 
@@ -188,7 +359,8 @@ function filterSessions(items, { provider, search } = {}) {
       item.provider,
       item.relativePath,
       item.cwd,
-      item.preview || ''
+      item.preview || '',
+      ...(item.recentPrompts || [])
     ];
 
     return haystacks.some((value) => String(value || '').toLowerCase().includes(query));
@@ -224,8 +396,9 @@ function paginate(items, { page = 1, limit = 50 } = {}) {
 
 function scanSessions(sessionsDir, options = {}) {
   const dir = getSessionsDir(sessionsDir);
+  const { locale } = resolveTranslator(options);
   const includePreview = Boolean(options.search || options.includePreview);
-  const allItems = getAllSessions(dir, { includePreview });
+  const allItems = getAllSessions(dir, { includePreview, locale });
   const filtered = filterSessions(allItems, options);
   const paginated = paginate(filtered, options);
 
@@ -244,9 +417,10 @@ function getProviders(sessionsDir) {
   return summarizeProviders(getAllSessions(sessionsDir));
 }
 
-function getOverview(sessionsDir) {
+function getOverview(sessionsDir, options = {}) {
   const dir = getSessionsDir(sessionsDir);
-  const items = getAllSessions(dir);
+  const { locale } = resolveTranslator(options);
+  const items = getAllSessions(dir, { locale });
   const providers = summarizeProviders(items);
   const backups = listBackupSnapshots(dir);
   const bytes = items.reduce((sum, item) => sum + item.size, 0);
@@ -258,7 +432,7 @@ function getOverview(sessionsDir) {
       providers: providers.length,
       backups: backups.length,
       bytes,
-      bytesDisplay: formatBytes(bytes)
+      bytesDisplay: formatBytesDisplay(bytes, locale)
     },
     providers,
     latestSessionAt: items.length ? items[0].timestamp : null,
@@ -267,23 +441,34 @@ function getOverview(sessionsDir) {
   };
 }
 
-function getSessionDetail(filePath, sessionsDir) {
-  const validatedPath = validateSessionPath(filePath, sessionsDir);
+function getSessionDetail(filePath, sessionsDir, options = {}) {
+  const validatedPath = validateSessionPath(filePath, sessionsDir, options);
   const meta = parseFirstLine(validatedPath);
   if (!meta) {
     return null;
   }
 
-  return normalizeSessionRecord(validatedPath, getSessionsDir(sessionsDir), meta, { includePreview: true });
+  return normalizeSessionRecord(validatedPath, getSessionsDir(sessionsDir), meta, {
+    includePreview: true,
+    previewPromptLimit: options.previewPromptLimit || MAX_DETAIL_PROMPTS,
+    locale: resolveTranslator(options).locale
+  });
 }
 
-function listBackups(sessionsDir) {
-  return listBackupSnapshots(getSessionsDir(sessionsDir));
+function listBackups(sessionsDir, options = {}) {
+  const { locale } = resolveTranslator(options);
+
+  return listBackupSnapshots(getSessionsDir(sessionsDir)).map((backup) => ({
+    ...backup,
+    createdAtDisplay: formatDisplayTimestamp(backup.createdAt, locale)
+  }));
 }
 
-function validateSessionPath(filePath, sessionsDir) {
+function validateSessionPath(filePath, sessionsDir, options = {}) {
+  const { t } = resolveTranslator(options);
+
   if (!filePath) {
-    throw new Error('Session file path is required.');
+    throw new Error(t('errors.sessionFilePathRequired'));
   }
 
   const root = getSessionsDir(sessionsDir);
@@ -292,29 +477,31 @@ function validateSessionPath(filePath, sessionsDir) {
   const relative = path.relative(normalizedRoot, resolved);
 
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
-    throw new Error(`Path is outside the sessions directory: ${filePath}`);
+    throw new Error(t('errors.pathOutsideSessionsDir', { path: filePath }));
   }
 
   if (!fs.existsSync(resolved)) {
-    throw new Error(`Session file not found: ${filePath}`);
+    throw new Error(t('errors.sessionFileNotFound', { path: filePath }));
   }
 
   return resolved;
 }
 
-function validateProviderName(value) {
+function validateProviderName(value, options = {}) {
+  const { t } = resolveTranslator(options);
   const provider = String(value || '').trim();
   if (!provider) {
-    throw new Error('Provider name is required.');
+    throw new Error(t('errors.providerNameRequired'));
   }
   if (!PROVIDER_PATTERN.test(provider)) {
-    throw new Error('Provider name may only contain letters, numbers, dot, underscore, or dash.');
+    throw new Error(t('errors.providerNameInvalid'));
   }
   return provider;
 }
 
-function runDoctor(sessionsDir) {
+function runDoctor(sessionsDir, options = {}) {
   const dir = getSessionsDir(sessionsDir);
+  const { locale, t } = resolveTranslator(options);
   const issues = [];
   const ids = new Map();
   let totalFiles = 0;
@@ -334,7 +521,7 @@ function runDoctor(sessionsDir) {
         severity: 'error',
         type: 'invalid_meta',
         relativePath,
-        message: 'The first JSONL line is missing or cannot be parsed as session_meta.'
+        message: t('doctor.invalidMeta')
       });
       return;
     }
@@ -345,7 +532,7 @@ function runDoctor(sessionsDir) {
         severity: 'warning',
         type: 'missing_provider',
         relativePath,
-        message: 'The session_meta payload does not contain model_provider.'
+        message: t('doctor.missingProvider')
       });
     }
 
@@ -356,7 +543,7 @@ function runDoctor(sessionsDir) {
           severity: 'warning',
           type: 'duplicate_id',
           relativePath,
-          message: `Duplicate session id detected. First seen at ${existing}.`
+          message: t('doctor.duplicateId', { path: existing })
         });
       } else {
         ids.set(meta.id, relativePath);
@@ -373,19 +560,31 @@ function runDoctor(sessionsDir) {
     }
   });
 
+  const indexHealth = getIndexHealth(dir, { t });
+  issues.push(...indexHealth.issues);
+
   return {
-    ok: !issues.some((issue) => issue.severity === 'error'),
+    ok: (
+      !issues.some((issue) => issue.severity === 'error') &&
+      indexHealth.missingThreadCount === 0 &&
+      indexHealth.providerMismatchCount === 0 &&
+      indexHealth.missingSessionIndexCount === 0
+    ),
     sessionsDir: dir,
     summary: {
       totalFiles,
       invalidMetaCount,
       missingProviderCount,
       duplicateIdCount: issues.filter((issue) => issue.type === 'duplicate_id').length,
+      missingThreadCount: indexHealth.missingThreadCount,
+      providerMismatchCount: indexHealth.providerMismatchCount,
+      missingSessionIndexCount: indexHealth.missingSessionIndexCount,
+      stateDatabaseCount: indexHealth.stateDatabaseCount,
       backupCount: listBackupSnapshots(dir).length,
       oldestTimestamp,
-      oldestTimestampDisplay: formatTimestamp(oldestTimestamp),
+      oldestTimestampDisplay: formatDisplayTimestamp(oldestTimestamp, locale),
       latestTimestamp,
-      latestTimestampDisplay: formatTimestamp(latestTimestamp)
+      latestTimestampDisplay: formatDisplayTimestamp(latestTimestamp, locale)
     },
     issues
   };
@@ -393,7 +592,8 @@ function runDoctor(sessionsDir) {
 
 module.exports = {
   DEFAULT_SESSIONS_DIR,
-  extractFirstUserMessage,
+  extractRecentUserPrompts,
+  extractUserInputText,
   getAllSessions,
   getOverview,
   getProviders,
@@ -402,7 +602,9 @@ module.exports = {
   listBackups,
   parseFirstLine,
   runDoctor,
+  sanitizeUserPrompt,
   scanSessions,
+  summarizePrompt,
   validateProviderName,
   validateSessionPath,
   walkSessionFiles

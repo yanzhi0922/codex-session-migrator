@@ -1,4 +1,12 @@
+const STORAGE_KEYS = {
+  language: 'codex-session-migrator:language',
+  preferences: 'codex-session-migrator:preferences'
+};
+
 const state = {
+  locale: resolveInitialLocale(),
+  localeOptions: [],
+  messages: {},
   provider: 'all',
   search: '',
   limit: 50,
@@ -10,15 +18,25 @@ const state = {
   selected: new Set(),
   overview: null,
   backups: [],
-  doctor: null
+  doctor: null,
+  activeSessionPath: '',
+  activeSession: null,
+  detailRequestId: 0,
+  isDetailOpen: false,
+  loadingSession: false,
+  busyAction: '',
+  lastPreview: null,
+  expandedPrompts: new Set()
 };
 
 const elements = {
   backupsList: document.getElementById('backupsList'),
+  busyNotice: document.getElementById('busyNotice'),
   clearSelectionButton: document.getElementById('clearSelectionButton'),
   doctorIssues: document.getElementById('doctorIssues'),
   doctorSummary: document.getElementById('doctorSummary'),
   filterForm: document.getElementById('filterForm'),
+  languageSelect: document.getElementById('languageSelect'),
   latestSessionAt: document.getElementById('latestSessionAt'),
   limitFilter: document.getElementById('limitFilter'),
   matchingCount: document.getElementById('matchingCount'),
@@ -30,19 +48,91 @@ const elements = {
   prevPageButton: document.getElementById('prevPageButton'),
   providerChips: document.getElementById('providerChips'),
   providerFilter: document.getElementById('providerFilter'),
+  providerSuggestions: document.getElementById('providerSuggestions'),
+  repairIndexesButton: document.getElementById('repairIndexesButton'),
   refreshButton: document.getElementById('refreshButton'),
+  resetFiltersButton: document.getElementById('resetFiltersButton'),
   runButton: document.getElementById('runButton'),
   searchInput: document.getElementById('searchInput'),
   selectedCount: document.getElementById('selectedCount'),
+  sessionDetailClose: document.getElementById('sessionDetailClose'),
   selectionMode: document.getElementById('selectionMode'),
   selectPageButton: document.getElementById('selectPageButton'),
+  sessionDetailBody: document.getElementById('sessionDetailBody'),
+  sessionDetailModal: document.getElementById('sessionDetailModal'),
   sessionsDir: document.getElementById('sessionsDir'),
   sessionsTableBody: document.getElementById('sessionsTableBody'),
-  statsGrid: document.getElementById('statsGrid'),
   statCardTemplate: document.getElementById('statCardTemplate'),
+  statsGrid: document.getElementById('statsGrid'),
   targetProviderInput: document.getElementById('targetProviderInput'),
   togglePageSelection: document.getElementById('togglePageSelection')
 };
+
+function normalizeLocale(locale) {
+  const value = String(locale || '').trim().toLowerCase();
+  if (!value) {
+    return 'en';
+  }
+  if (value.startsWith('zh')) {
+    return 'zh-CN';
+  }
+  return 'en';
+}
+
+function resolveInitialLocale() {
+  const queryLocale = new URLSearchParams(window.location.search).get('lang');
+  const storedLocale = localStorage.getItem(STORAGE_KEYS.language);
+  const browserLocale = navigator.language || navigator.languages?.[0];
+  return normalizeLocale(queryLocale || storedLocale || browserLocale);
+}
+
+function loadPreferences() {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEYS.preferences) || '{}');
+  } catch {
+    return {};
+  }
+}
+
+function savePreferences() {
+  localStorage.setItem(STORAGE_KEYS.language, state.locale);
+  localStorage.setItem(STORAGE_KEYS.preferences, JSON.stringify({
+    provider: state.provider,
+    search: state.search,
+    limit: state.limit,
+    targetProvider: elements.targetProviderInput.value.trim()
+  }));
+}
+
+function syncUrlLocale() {
+  const url = new URL(window.location.href);
+  url.searchParams.set('lang', state.locale);
+  window.history.replaceState({}, '', url);
+}
+
+function syncControlsFromState() {
+  elements.providerFilter.value = state.provider;
+  elements.searchInput.value = state.search;
+  elements.limitFilter.value = String(state.limit);
+}
+
+function getValue(object, path) {
+  return String(path || '')
+    .split('.')
+    .filter(Boolean)
+    .reduce((current, key) => (current && current[key] !== undefined ? current[key] : undefined), object);
+}
+
+function interpolate(template, values = {}) {
+  return String(template).replace(/\{([^}]+)\}/g, (match, key) => {
+    return values[key] === undefined || values[key] === null ? match : String(values[key]);
+  });
+}
+
+function t(key, values = {}) {
+  const template = getValue(state.messages, key);
+  return typeof template === 'string' ? interpolate(template, values) : key;
+}
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -53,30 +143,473 @@ function escapeHtml(value) {
     .replaceAll("'", '&#39;');
 }
 
-async function fetchJson(url, options) {
-  const response = await fetch(url, options);
-  const payload = await response.json();
+function escapeRegExp(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function getSearchTokens(query) {
+  return [...new Set(
+    String(query || '')
+      .trim()
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length >= 2)
+  )].sort((left, right) => right.length - left.length);
+}
+
+function applyInlinePromptFormatting(text) {
+  return String(text || '')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+}
+
+function renderInlinePromptMarkup(value) {
+  return String(value || '')
+    .split(/(`[^`\n]+`)/g)
+    .map((segment) => {
+      if (/^`[^`\n]+`$/.test(segment)) {
+        return `<code>${escapeHtml(segment.slice(1, -1))}</code>`;
+      }
+      return applyInlinePromptFormatting(escapeHtml(segment));
+    })
+    .join('');
+}
+
+function renderInlinePromptLines(text) {
+  return String(text || '')
+    .split('\n')
+    .map((line) => renderInlinePromptMarkup(line))
+    .join('<br>');
+}
+
+function isPromptFence(line) {
+  return /^\s*```/.test(line);
+}
+
+function isPromptHeading(line) {
+  return /^\s*#{1,6}\s+/.test(line);
+}
+
+function isPromptQuote(line) {
+  return /^\s*>\s?/.test(line);
+}
+
+function isPromptList(line) {
+  return /^\s*[-*+]\s+/.test(line);
+}
+
+function isPromptOrderedList(line) {
+  return /^\s*\d+[.)]\s+/.test(line);
+}
+
+function isPromptSpecialLine(line) {
+  return isPromptFence(line) ||
+    isPromptHeading(line) ||
+    isPromptQuote(line) ||
+    isPromptList(line) ||
+    isPromptOrderedList(line);
+}
+
+function highlightPromptMarkup(html, query) {
+  const tokens = getSearchTokens(query);
+  if (!html || !tokens.length || typeof document === 'undefined') {
+    return html;
+  }
+
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  const skipTags = new Set(['CODE', 'PRE', 'MARK', 'BUTTON']);
+  const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      if (!node.nodeValue || !node.nodeValue.trim()) {
+        return NodeFilter.FILTER_REJECT;
+      }
+
+      const parentTag = node.parentElement?.tagName;
+      if (parentTag && skipTags.has(parentTag)) {
+        return NodeFilter.FILTER_REJECT;
+      }
+
+      return NodeFilter.FILTER_ACCEPT;
+    }
+  });
+
+  const textNodes = [];
+  let currentNode = walker.nextNode();
+  while (currentNode) {
+    textNodes.push(currentNode);
+    currentNode = walker.nextNode();
+  }
+
+  const pattern = new RegExp(`(${tokens.map(escapeRegExp).join('|')})`, 'ig');
+
+  for (const textNode of textNodes) {
+    const source = textNode.nodeValue;
+    pattern.lastIndex = 0;
+    if (!pattern.test(source)) {
+      continue;
+    }
+
+    pattern.lastIndex = 0;
+    const fragment = document.createDocumentFragment();
+    let lastIndex = 0;
+    let match = pattern.exec(source);
+
+    while (match) {
+      if (match.index > lastIndex) {
+        fragment.appendChild(document.createTextNode(source.slice(lastIndex, match.index)));
+      }
+
+      const mark = document.createElement('mark');
+      mark.className = 'prompt-match';
+      mark.textContent = match[0];
+      fragment.appendChild(mark);
+      lastIndex = match.index + match[0].length;
+      match = pattern.exec(source);
+    }
+
+    if (lastIndex < source.length) {
+      fragment.appendChild(document.createTextNode(source.slice(lastIndex)));
+    }
+
+    textNode.parentNode.replaceChild(fragment, textNode);
+  }
+
+  return template.innerHTML;
+}
+
+function getPromptExpansionKey(contextKey, index) {
+  return `${contextKey || 'prompt'}:${index}`;
+}
+
+function isLongPrompt(text) {
+  const normalized = String(text || '');
+  const lineCount = normalized.split('\n').length;
+  return normalized.length > 420 || lineCount > 9;
+}
+
+function renderPromptMarkup(text, options = {}) {
+  const normalized = String(text || '').replace(/\r\n?/g, '\n').trim();
+  const compact = Boolean(options.compact);
+  const collapsed = Boolean(options.collapsed);
+
+  if (!normalized) {
+    return '';
+  }
+
+  const lines = normalized.split('\n');
+  const blocks = [];
+
+  for (let index = 0; index < lines.length;) {
+    const line = lines[index];
+
+    if (!line.trim()) {
+      index += 1;
+      continue;
+    }
+
+    if (isPromptFence(line)) {
+      const buffer = [];
+      index += 1;
+
+      while (index < lines.length && !isPromptFence(lines[index])) {
+        buffer.push(lines[index]);
+        index += 1;
+      }
+
+      if (index < lines.length && isPromptFence(lines[index])) {
+        index += 1;
+      }
+
+      blocks.push({
+        type: 'code',
+        text: buffer.join('\n').replace(/\n+$/g, '')
+      });
+      continue;
+    }
+
+    if (isPromptHeading(line)) {
+      const match = line.match(/^\s*(#{1,6})\s+(.*)$/);
+      blocks.push({
+        type: 'heading',
+        level: match ? match[1].length : 2,
+        text: match ? match[2] : line.trim()
+      });
+      index += 1;
+      continue;
+    }
+
+    if (isPromptQuote(line)) {
+      const buffer = [];
+      while (index < lines.length && isPromptQuote(lines[index])) {
+        buffer.push(lines[index].replace(/^\s*>\s?/, ''));
+        index += 1;
+      }
+
+      blocks.push({
+        type: 'quote',
+        text: buffer.join('\n')
+      });
+      continue;
+    }
+
+    if (isPromptList(line)) {
+      const items = [];
+      while (index < lines.length && isPromptList(lines[index])) {
+        items.push(lines[index].replace(/^\s*[-*+]\s+/, ''));
+        index += 1;
+      }
+
+      blocks.push({
+        type: 'ul',
+        items
+      });
+      continue;
+    }
+
+    if (isPromptOrderedList(line)) {
+      const items = [];
+      while (index < lines.length && isPromptOrderedList(lines[index])) {
+        items.push(lines[index].replace(/^\s*\d+[.)]\s+/, ''));
+        index += 1;
+      }
+
+      blocks.push({
+        type: 'ol',
+        items
+      });
+      continue;
+    }
+
+    const paragraph = [];
+    while (
+      index < lines.length &&
+      lines[index].trim() &&
+      !isPromptSpecialLine(lines[index])
+    ) {
+      paragraph.push(lines[index]);
+      index += 1;
+    }
+
+    blocks.push({
+      type: 'paragraph',
+      text: paragraph.join('\n')
+    });
+  }
+
+  const html = blocks.map((block) => {
+    if (block.type === 'code') {
+      return `<pre><code>${escapeHtml(block.text)}</code></pre>`;
+    }
+
+    if (block.type === 'quote') {
+      return `<blockquote>${renderInlinePromptLines(block.text)}</blockquote>`;
+    }
+
+    if (block.type === 'ul') {
+      return `<ul>${block.items.map((item) => `<li>${renderInlinePromptMarkup(item)}</li>`).join('')}</ul>`;
+    }
+
+    if (block.type === 'ol') {
+      return `<ol>${block.items.map((item) => `<li>${renderInlinePromptMarkup(item)}</li>`).join('')}</ol>`;
+    }
+
+    if (block.type === 'heading') {
+      const level = Math.min(4, Math.max(1, Number(block.level) || 2));
+      return `<h${level}>${renderInlinePromptMarkup(block.text)}</h${level}>`;
+    }
+
+    return `<p>${renderInlinePromptLines(block.text)}</p>`;
+  }).join('');
+
+  const withHighlight = highlightPromptMarkup(html, options.highlightQuery);
+
+  return `<div class="prompt-markup${compact ? ' is-compact' : ''}${collapsed ? ' is-collapsed' : ''}">${withHighlight}</div>`;
+}
+
+function getSessionPrompts(item) {
+  const prompts = Array.isArray(item?.recentPrompts)
+    ? item.recentPrompts.filter((prompt) => Boolean(String(prompt || '').trim()))
+    : [];
+
+  if (prompts.length) {
+    return prompts;
+  }
+
+  return item?.preview ? [String(item.preview)] : [];
+}
+
+function renderPromptStack(prompts, options = {}) {
+  const compact = Boolean(options.compact);
+  const timeline = Boolean(options.timeline);
+  const highlightQuery = options.highlightQuery ?? state.search;
+  const sourceItems = Array.isArray(prompts)
+    ? prompts.filter((prompt) => Boolean(String(prompt || '').trim()))
+    : [];
+  const items = compact
+    ? sourceItems
+      .map((prompt) => reducePromptForCompactCard(prompt))
+      .filter((prompt) => Boolean(String(prompt || '').trim()))
+    : sourceItems;
+  const displayItems = items.length ? items : sourceItems;
+
+  if (!displayItems.length) {
+    return `<div class="prompt-stack-empty">${escapeHtml(t('common.noPreview'))}</div>`;
+  }
+
+  const maxPrompts = Math.max(1, Number(options.maxPrompts) || displayItems.length);
+  const visiblePrompts = displayItems.slice(0, maxPrompts);
+  const hiddenCount = Math.max(0, displayItems.length - visiblePrompts.length);
+
+  return `
+    <div class="prompt-stack${compact ? ' is-compact' : ''}${timeline ? ' is-timeline' : ''}">
+      ${visiblePrompts.map((prompt, index) => {
+        const tone = index === 0 ? 'latest' : 'earlier';
+        const label = index === 0 ? t('common.latest') : t('common.earlier');
+        const expansionKey = getPromptExpansionKey(options.contextKey, index);
+        const expandable = Boolean(options.expandable) && isLongPrompt(prompt);
+        const expanded = expandable && state.expandedPrompts.has(expansionKey);
+
+        return `
+          <article class="prompt-card${compact ? ' is-compact' : ''}${timeline ? ' is-timeline' : ''}">
+            <div class="prompt-card-header">
+              <div class="prompt-card-heading">
+                ${timeline ? `<span class="prompt-index">${index + 1}</span>` : ''}
+                <span class="prompt-badge ${tone}">${escapeHtml(label)}</span>
+              </div>
+              ${expandable ? `
+                <button
+                  class="button button-ghost prompt-toggle"
+                  type="button"
+                  data-prompt-toggle="${escapeHtml(expansionKey)}"
+                >${escapeHtml(expanded ? t('common.collapse') : t('common.expand'))}</button>
+              ` : ''}
+            </div>
+            ${renderPromptMarkup(prompt, {
+              compact,
+              collapsed: expandable && !expanded && !compact,
+              highlightQuery
+            })}
+          </article>
+        `;
+      }).join('')}
+      ${hiddenCount ? `
+        <div class="prompt-stack-more">${escapeHtml(t('common.morePrompts', { count: hiddenCount }))}</div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function compactWorkspacePath(value) {
+  const raw = String(value || '').trim();
+  if (!raw) {
+    return '—';
+  }
+
+  const normalized = raw.replace(/\//g, '\\');
+  const segments = normalized.split(/\\+/).filter(Boolean);
+
+  if (segments.length <= 2) {
+    return raw;
+  }
+
+  const tail = segments.slice(-2).join('\\');
+
+  if (/^[A-Za-z]:$/.test(segments[0])) {
+    return `${segments[0]}\\…\\${tail}`;
+  }
+
+  if (raw.startsWith('\\\\')) {
+    return `\\\\…\\${tail}`;
+  }
+
+  return `…\\${tail}`;
+}
+
+function isTerminalNoiseLine(line) {
+  const value = String(line || '').trim();
+  if (!value) {
+    return false;
+  }
+
+  return (
+    /^(?:PS\s+[A-Za-z]:\\|[A-Za-z]:\\.*>|mysql\s*:|java\s+version\s+"|Windows PowerShell\b)/i.test(value) ||
+    /^(?:CategoryInfo|FullyQualifiedErrorId|ComputerName|RemoteAddress|RemotePort|InterfaceAlias|SourceAddress|TcpTestSucceeded|PingSucceeded|PingReplyDetails)\s*:/i.test(value) ||
+    /^(?:版权所有|尝试新的跨平台 PowerShell|\[IntelliJ IDEA\]|警告:)/.test(value)
+  );
+}
+
+function reducePromptForCompactCard(prompt) {
+  const lines = String(prompt || '').replace(/\r\n?/g, '\n').split('\n');
+  const reducedLines = [];
+  let noiseMatches = 0;
+
+  for (const line of lines) {
+    if (isTerminalNoiseLine(line)) {
+      noiseMatches += 1;
+      continue;
+    }
+
+    reducedLines.push(line);
+  }
+
+  const compact = reducedLines
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  if (!compact && noiseMatches) {
+    return null;
+  }
+
+  return compact || String(prompt || '').trim() || null;
+}
+
+function buildApiUrl(path, params = {}) {
+  const url = new URL(path, window.location.origin);
+  url.searchParams.set('lang', state.locale);
+
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null || value === '') {
+      continue;
+    }
+    url.searchParams.set(key, String(value));
+  }
+
+  return url;
+}
+
+async function fetchJson(path, options = {}) {
+  const requestOptions = {
+    method: options.method || 'GET',
+    headers: {
+      ...(options.headers || {})
+    }
+  };
+
+  if (options.body !== undefined) {
+    requestOptions.headers['Content-Type'] = 'application/json';
+    requestOptions.body = JSON.stringify({
+      ...options.body,
+      lang: state.locale
+    });
+  }
+
+  const response = await fetch(buildApiUrl(path, options.params), requestOptions);
+  const text = await response.text();
+  let payload = {};
+
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(text || `Request failed: ${response.status}`);
+  }
+
   if (!response.ok || payload.ok === false) {
     throw new Error(payload.error || `Request failed: ${response.status}`);
   }
+
   return payload;
-}
-
-function getSelectionPayload() {
-  if (state.selected.size > 0) {
-    return {
-      filePaths: Array.from(state.selected)
-    };
-  }
-
-  return {
-    provider: state.provider === 'all' ? '' : state.provider,
-    search: state.search
-  };
-}
-
-function hasScopedSelection() {
-  return state.selected.size > 0 || state.provider !== 'all' || Boolean(state.search);
 }
 
 function setMessage(type, message) {
@@ -90,6 +623,88 @@ function clearMessage() {
   elements.messagePanel.textContent = '';
 }
 
+function setBusy(action = '') {
+  state.busyAction = action;
+  const busy = Boolean(action);
+
+  elements.busyNotice.className = busy ? 'busy-notice' : 'busy-notice hidden';
+  elements.busyNotice.textContent = busy ? t(`busy.${action}`) : '';
+
+  const disabledElements = [
+    elements.clearSelectionButton,
+    elements.languageSelect,
+    elements.limitFilter,
+    elements.nextPageButton,
+    elements.previewButton,
+    elements.prevPageButton,
+    elements.providerFilter,
+    elements.repairIndexesButton,
+    elements.refreshButton,
+    elements.resetFiltersButton,
+    elements.runButton,
+    elements.searchInput,
+    elements.selectPageButton,
+    elements.targetProviderInput,
+    elements.togglePageSelection
+  ];
+
+  for (const element of disabledElements) {
+    element.disabled = busy;
+  }
+}
+
+function renderLanguageOptions() {
+  elements.languageSelect.innerHTML = state.localeOptions
+    .map((item) => {
+      const selected = item.code === state.locale ? ' selected' : '';
+      return `<option value="${escapeHtml(item.code)}"${selected}>${escapeHtml(item.label)}</option>`;
+    })
+    .join('');
+}
+
+function applyStaticText() {
+  document.documentElement.lang = state.locale;
+  document.title = t('pageTitle');
+
+  const description = document.querySelector('meta[name="description"]');
+  if (description) {
+    description.setAttribute('content', t('pageDescription'));
+  }
+
+  document.querySelectorAll('[data-i18n]').forEach((node) => {
+    node.textContent = t(node.dataset.i18n);
+  });
+
+  document.querySelectorAll('[data-i18n-placeholder]').forEach((node) => {
+    node.setAttribute('placeholder', t(node.dataset.i18nPlaceholder));
+  });
+
+  document.querySelectorAll('[data-i18n-aria-label]').forEach((node) => {
+    node.setAttribute('aria-label', t(node.dataset.i18nAriaLabel));
+  });
+}
+
+function renderProviderFilter() {
+  const allCount = state.overview ? state.overview.totals.sessions : 0;
+  const providers = [{ name: 'all', count: allCount }, ...state.providers];
+
+  elements.providerFilter.innerHTML = providers.map((provider) => {
+    const selected = provider.name === state.provider ? ' selected' : '';
+    const label = provider.name === 'all'
+      ? t('common.allProviders', { count: provider.count })
+      : t('common.providerCount', { name: provider.name, count: provider.count });
+
+    return `<option value="${escapeHtml(provider.name)}"${selected}>${escapeHtml(label)}</option>`;
+  }).join('');
+}
+
+function renderProviderSuggestions() {
+  const names = [...new Set((state.overview?.providers || []).map((item) => item.name))];
+  elements.providerSuggestions.innerHTML = names
+    .map((name) => `<option value="${escapeHtml(name)}"></option>`)
+    .join('');
+}
+
 function renderStats() {
   const overview = state.overview;
   if (!overview) {
@@ -97,51 +712,169 @@ function renderStats() {
   }
 
   elements.sessionsDir.textContent = overview.sessionsDir;
-  elements.latestSessionAt.textContent = overview.latestSessionAtDisplay || 'No sessions found';
+  elements.latestSessionAt.textContent = overview.latestSessionAtDisplay || t('common.loading');
   elements.statsGrid.innerHTML = '';
 
   const stats = [
-    ['Sessions', overview.totals.sessions],
-    ['Providers', overview.totals.providers],
-    ['Backups', overview.totals.backups],
-    ['Disk Usage', overview.totals.bytesDisplay]
+    ['overview.sessions', overview.totals.sessions],
+    ['overview.providers', overview.totals.providers],
+    ['overview.backups', overview.totals.backups],
+    ['overview.diskUsage', overview.totals.bytesDisplay]
   ];
 
-  for (const [label, value] of stats) {
+  for (const [labelKey, value] of stats) {
     const fragment = elements.statCardTemplate.content.cloneNode(true);
-    fragment.querySelector('.stat-label').textContent = label;
-    fragment.querySelector('.stat-value').textContent = value;
+    fragment.querySelector('.stat-label').textContent = t(labelKey);
+    fragment.querySelector('.stat-value').textContent = String(value);
     elements.statsGrid.appendChild(fragment);
   }
 
-  elements.providerChips.innerHTML = overview.providers
-    .map((provider) => `<span class="provider-chip">${escapeHtml(provider.name)} <strong>${provider.count}</strong></span>`)
-    .join('');
-}
+  const chips = [{ name: 'all', count: overview.totals.sessions }, ...overview.providers];
+  elements.providerChips.innerHTML = chips.map((provider) => {
+    const active = provider.name === state.provider ? ' is-active' : '';
+    const label = provider.name === 'all'
+      ? t('common.allProviders', { count: provider.count })
+      : t('common.providerCount', { name: provider.name, count: provider.count });
 
-function renderProviderFilter() {
-  const providers = [{ name: 'all', count: state.overview ? state.overview.totals.sessions : 0 }, ...state.providers];
-  elements.providerFilter.innerHTML = providers
-    .map((provider) => {
-      const selected = provider.name === state.provider ? ' selected' : '';
-      const label = provider.name === 'all' ? `All providers (${provider.count})` : `${provider.name} (${provider.count})`;
-      return `<option value="${escapeHtml(provider.name)}"${selected}>${escapeHtml(label)}</option>`;
-    })
-    .join('');
+    return `
+      <button
+        class="provider-chip-button${active}"
+        type="button"
+        data-provider="${escapeHtml(provider.name)}"
+        ${state.busyAction ? 'disabled' : ''}
+      >
+        ${escapeHtml(label)}
+      </button>
+    `;
+  }).join('');
 }
 
 function renderSelectionSummary() {
   elements.selectedCount.textContent = String(state.selected.size);
   elements.matchingCount.textContent = String(state.totalMatching);
-  elements.selectionMode.textContent = state.selected.size ? 'Explicit file selection' : 'Current filters';
+  elements.selectionMode.textContent = state.selected.size
+    ? t('common.explicitSelection')
+    : t('common.currentFilters');
+}
+
+function getDisplayValue(value, fallback = '—') {
+  const normalized = String(value ?? '').trim();
+  return normalized || fallback;
+}
+
+function formatPromptCount(count) {
+  const total = Math.max(0, Number(count) || 0);
+
+  if (state.locale === 'en') {
+    return total === 1 ? '1 prompt' : `${total} prompts`;
+  }
+
+  return t('detail.promptCount', { count: total });
+}
+
+function getDetailSummaryChips(item, prompts) {
+  return [
+    {
+      label: t('detail.fields.when'),
+      value: getDisplayValue(item.timestampDisplay || item.timestamp || t('common.unknown'))
+    },
+    {
+      label: t('detail.fields.size'),
+      value: getDisplayValue(item.sizeDisplay)
+    },
+    {
+      label: t('detail.fields.cliVersion'),
+      value: getDisplayValue(item.cliVersion)
+    },
+    {
+      label: t('detail.fields.originator'),
+      value: getDisplayValue(item.originator)
+    },
+    {
+      label: t('detail.fields.recentPrompts'),
+      value: formatPromptCount(prompts.length)
+    }
+  ];
+}
+
+function renderDetailMetaCards(entries) {
+  return `
+    <div class="detail-meta-grid">
+      ${entries.map((entry) => {
+        const value = getDisplayValue(entry.value);
+        const canCopy = Boolean(String(entry.copyValue || '').trim());
+
+        return `
+          <article class="detail-meta-card${entry.wide ? ' is-wide' : ''}">
+            <div class="detail-meta-head">
+              <span>${escapeHtml(entry.label)}</span>
+              ${canCopy ? `
+                <button
+                  class="button button-ghost detail-copy-button"
+                  type="button"
+                  data-copy-value="${escapeHtml(entry.copyValue)}"
+                  data-copy-label="${escapeHtml(entry.label)}"
+                >${escapeHtml(t('common.copy'))}</button>
+              ` : ''}
+            </div>
+            <div class="detail-meta-value${entry.mono ? ' detail-mono' : ''}">${escapeHtml(value)}</div>
+          </article>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+function syncDetailModalVisibility() {
+  elements.sessionDetailModal.hidden = !state.isDetailOpen;
+  elements.sessionDetailModal.classList.toggle('is-open', state.isDetailOpen);
+  elements.sessionDetailModal.setAttribute('aria-hidden', String(!state.isDetailOpen));
+  document.body.classList.toggle('detail-modal-open', state.isDetailOpen);
+}
+
+function focusSessionRow(filePath) {
+  if (!filePath) {
+    return;
+  }
+
+  const row = [...elements.sessionsTableBody.querySelectorAll('tr[data-file-path]')]
+    .find((item) => item.dataset.filePath === filePath);
+
+  row?.focus();
+}
+
+function closeSessionDetail(options = {}) {
+  const restoreFocus = options.restoreFocus !== false;
+  const closingPath = state.activeSessionPath;
+
+  state.detailRequestId += 1;
+  state.isDetailOpen = false;
+  state.activeSessionPath = '';
+  state.activeSession = null;
+  state.loadingSession = false;
+
+  syncDetailModalVisibility();
+  renderSessions();
+  renderSessionDetail();
+
+  if (restoreFocus && closingPath) {
+    requestAnimationFrame(() => {
+      focusSessionRow(closingPath);
+    });
+  }
 }
 
 function renderSessions() {
+  elements.pageStatus.textContent = t('sessions.pageStatus', {
+    page: state.page,
+    totalPages: state.totalPages
+  });
+
   if (!state.sessions.length) {
     elements.sessionsTableBody.innerHTML = `
       <tr>
-        <td colspan="6">
-          <div class="empty-state">No sessions matched the current filters.</div>
+        <td colspan="5">
+          <div class="empty-state">${escapeHtml(t('sessions.empty'))}</div>
         </td>
       </tr>
     `;
@@ -152,50 +885,82 @@ function renderSessions() {
 
   elements.sessionsTableBody.innerHTML = state.sessions.map((item) => {
     const checked = state.selected.has(item.filePath) ? ' checked' : '';
+    const active = state.isDetailOpen && state.activeSessionPath === item.filePath ? ' class="is-active"' : '';
+    const disabled = state.busyAction ? ' disabled' : '';
+    const promptPreview = renderPromptStack(getSessionPrompts(item), {
+      compact: true,
+      maxPrompts: 2,
+      contextKey: item.filePath,
+      highlightQuery: state.search
+    });
+    const cwd = item.cwd || '—';
+    const workspaceLabel = compactWorkspacePath(cwd);
+    const timestamp = item.timestampDisplay || item.timestamp || t('common.unknown');
+
     return `
-      <tr data-file-path="${escapeHtml(item.filePath)}">
+      <tr
+        data-file-path="${escapeHtml(item.filePath)}"
+        tabindex="0"
+        aria-label="${escapeHtml(t('sessions.openDetailsAria', { id: item.id }))}"
+        ${active}
+      >
         <td class="cell-checkbox">
-          <input class="row-selector" type="checkbox" value="${escapeHtml(item.filePath)}"${checked}>
+          <input class="row-selector" type="checkbox" value="${escapeHtml(item.filePath)}"${checked}${disabled}>
         </td>
         <td><span class="provider-pill">${escapeHtml(item.provider)}</span></td>
-        <td>${escapeHtml(item.timestampDisplay || item.timestamp || 'unknown')}</td>
         <td>
-          <div class="path-stack">
-            <strong>${escapeHtml(item.relativePath)}</strong>
+          <div class="time-stack">
+            <strong>${escapeHtml(timestamp)}</strong>
             <span class="muted">${escapeHtml(item.id)}</span>
           </div>
         </td>
-        <td class="muted">${escapeHtml(item.cwd || '-')}</td>
-        <td class="muted">${escapeHtml(item.preview || 'No preview available')}</td>
+        <td class="muted session-workspace-cell" title="${escapeHtml(cwd)}">
+          <span class="clamp-text">${escapeHtml(workspaceLabel)}</span>
+        </td>
+        <td class="prompt-preview-cell">${promptPreview}</td>
       </tr>
     `;
   }).join('');
 
-  const allSelected = state.sessions.every((item) => state.selected.has(item.filePath));
-  elements.togglePageSelection.checked = allSelected;
-  elements.pageStatus.textContent = `Page ${state.page} / ${state.totalPages}`;
+  elements.togglePageSelection.checked = state.sessions.every((item) => state.selected.has(item.filePath));
   renderSelectionSummary();
 }
 
 function renderBackups() {
   if (!state.backups.length) {
-    elements.backupsList.innerHTML = '<div class="empty-state">No backup snapshots yet. The first migration will create one automatically.</div>';
+    elements.backupsList.innerHTML = `<div class="empty-state">${escapeHtml(t('backups.empty'))}</div>`;
     return;
   }
 
-  elements.backupsList.innerHTML = state.backups.map((backup) => `
-    <article class="stack-card">
-      <div class="stack-card-header">
-        <div>
-          <h3>${escapeHtml(backup.backupId)}</h3>
-          <p>${escapeHtml(backup.label)} • ${escapeHtml(backup.entryCount)} files</p>
+  elements.backupsList.innerHTML = state.backups.map((backup) => {
+    const sourceProvider = backup.sourceProvider || t('common.none');
+    const targetProvider = backup.targetProvider || t('common.none');
+    const reason = backup.reason || backup.label || t('common.none');
+
+    return `
+      <article class="stack-card">
+        <div class="stack-card-header">
+          <div>
+            <h3>${escapeHtml(backup.backupId)}</h3>
+            <p>${escapeHtml(backup.label)} • ${escapeHtml(t('common.filesCount', { count: backup.entryCount }))}</p>
+          </div>
+          <button
+            class="button button-ghost restore-button"
+            type="button"
+            data-backup-id="${escapeHtml(backup.backupId)}"
+            ${state.busyAction ? 'disabled' : ''}
+          >${escapeHtml(t('backups.restore'))}</button>
         </div>
-        <button class="button button-ghost restore-button" data-backup-id="${escapeHtml(backup.backupId)}">Restore</button>
-      </div>
-      <p>${escapeHtml(backup.createdAt)}</p>
-      <p>${escapeHtml(backup.backupDir)}</p>
-    </article>
-  `).join('');
+        <div class="meta-list">
+          <div class="meta-row"><span>${escapeHtml(t('backups.createdAt'))}</span><strong>${escapeHtml(backup.createdAtDisplay || backup.createdAt)}</strong></div>
+          <div class="meta-row"><span>${escapeHtml(t('backups.sourceProvider'))}</span><strong>${escapeHtml(sourceProvider)}</strong></div>
+          <div class="meta-row"><span>${escapeHtml(t('backups.targetProvider'))}</span><strong>${escapeHtml(targetProvider)}</strong></div>
+          <div class="meta-row"><span>${escapeHtml(t('backups.reason'))}</span><strong>${escapeHtml(reason)}</strong></div>
+          <div class="meta-row"><span>${escapeHtml(t('backups.path'))}</span><strong class="meta-path">${escapeHtml(backup.backupDir)}</strong></div>
+        </div>
+      </article>
+    `;
+  }).join('');
 }
 
 function renderDoctor() {
@@ -204,23 +969,34 @@ function renderDoctor() {
   }
 
   const summary = state.doctor.summary;
-  elements.doctorSummary.innerHTML = `
-    <div>
-      <span class="summary-label">Health</span>
-      <strong>${state.doctor.ok ? 'Healthy' : 'Needs attention'}</strong>
+  const metrics = [
+    [t('doctor.health'), state.doctor.ok ? t('doctor.healthy') : t('doctor.needsAttention')],
+    [t('doctor.invalidMeta'), summary.invalidMetaCount],
+    [t('doctor.missingProvider'), summary.missingProviderCount],
+    [t('doctor.duplicateIds'), summary.duplicateIdCount],
+    [t('doctor.missingThreads'), summary.missingThreadCount],
+    [t('doctor.providerMismatches'), summary.providerMismatchCount],
+    [t('doctor.missingSessionIndex'), summary.missingSessionIndexCount],
+    [t('doctor.scannedFiles'), summary.totalFiles]
+  ];
+
+  elements.doctorSummary.innerHTML = metrics.map(([label, value]) => `
+    <div class="summary-card">
+      <span class="summary-label">${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
     </div>
-    <div>
-      <span class="summary-label">Invalid meta</span>
-      <strong>${summary.invalidMetaCount}</strong>
-    </div>
-    <div>
-      <span class="summary-label">Missing provider</span>
-      <strong>${summary.missingProviderCount}</strong>
+  `).join('') + `
+    <div class="summary-card summary-card-wide">
+      <span class="summary-label">${escapeHtml(t('doctor.range'))}</span>
+      <strong>${escapeHtml(t('common.scannedRange', {
+        start: summary.oldestTimestampDisplay || t('common.unknown'),
+        end: summary.latestTimestampDisplay || t('common.unknown')
+      }))}</strong>
     </div>
   `;
 
   if (!state.doctor.issues.length) {
-    elements.doctorIssues.innerHTML = '<div class="empty-state">No structural issues detected in the scanned session set.</div>';
+    elements.doctorIssues.innerHTML = `<div class="empty-state">${escapeHtml(t('doctor.empty'))}</div>`;
     return;
   }
 
@@ -240,161 +1016,505 @@ function renderDoctor() {
 
 function renderPreview(preview) {
   if (!preview) {
-    elements.previewPanel.classList.add('hidden');
+    elements.previewPanel.className = 'preview-panel hidden';
     elements.previewPanel.innerHTML = '';
     return;
   }
 
-  const lines = preview.items.slice(0, 12).map((item) => {
-    return `<li>${escapeHtml(item.relativePath)} — ${escapeHtml(item.from)} → ${escapeHtml(item.to)}${item.skipped ? ' (skip)' : ''}</li>`;
-  }).join('');
+  const lines = preview.items.slice(0, 12).map((item) => `
+    <li>
+      <strong>${escapeHtml(item.relativePath)}</strong>
+      <span class="muted">${escapeHtml(item.from)} → ${escapeHtml(item.to)}${item.skipped ? ` ${escapeHtml(t('preview.skippedSuffix'))}` : ''}</span>
+    </li>
+  `).join('');
 
   elements.previewPanel.innerHTML = `
-    <strong>Migration preview</strong>
-    <p>${preview.totalSelected} sessions selected, ${preview.actionable} actionable, ${preview.skipped} already on the target provider.</p>
-    <ul>${lines}</ul>
+    <div class="preview-header">
+      <strong>${escapeHtml(t('preview.title'))}</strong>
+      <p class="muted">${escapeHtml(t('preview.backupNote'))}</p>
+    </div>
+    <div class="preview-metrics">
+      <div class="summary-card">
+        <span class="summary-label">${escapeHtml(t('preview.selected'))}</span>
+        <strong>${escapeHtml(preview.totalSelected)}</strong>
+      </div>
+      <div class="summary-card">
+        <span class="summary-label">${escapeHtml(t('preview.actionable'))}</span>
+        <strong>${escapeHtml(preview.actionable)}</strong>
+      </div>
+      <div class="summary-card">
+        <span class="summary-label">${escapeHtml(t('preview.skipped'))}</span>
+        <strong>${escapeHtml(preview.skipped)}</strong>
+      </div>
+    </div>
+    <ul class="preview-list">${lines}</ul>
   `;
-  elements.previewPanel.classList.remove('hidden');
+  elements.previewPanel.className = 'preview-panel';
+}
+
+function renderSessionDetail() {
+  if (state.loadingSession) {
+    elements.sessionDetailBody.innerHTML = `<div class="empty-state">${escapeHtml(t('detail.loading'))}</div>`;
+    return;
+  }
+
+  if (!state.activeSession) {
+    elements.sessionDetailBody.innerHTML = `
+      <div class="empty-state">
+        <strong>${escapeHtml(t('detail.emptyTitle'))}</strong>
+        <p>${escapeHtml(t('detail.emptyText'))}</p>
+      </div>
+    `;
+    return;
+  }
+
+  const item = state.activeSession;
+  const prompts = getSessionPrompts(item);
+  const summaryChips = getDetailSummaryChips(item, prompts);
+  const metadataEntries = [
+    {
+      label: t('detail.fields.id'),
+      value: item.id,
+      mono: true,
+      copyValue: item.id
+    },
+    {
+      label: t('detail.fields.path'),
+      value: item.relativePath,
+      mono: true,
+      wide: true,
+      copyValue: item.relativePath
+    },
+    {
+      label: t('detail.fields.workspace'),
+      value: item.cwd || '—',
+      mono: true,
+      wide: true,
+      copyValue: item.cwd || ''
+    }
+  ];
+  const workspace = getDisplayValue(item.cwd);
+  const timestamp = getDisplayValue(item.timestampDisplay || item.timestamp || t('common.unknown'));
+
+  elements.sessionDetailBody.innerHTML = `
+    <div class="detail-layout">
+      <section class="detail-summary-card">
+        <div class="detail-summary-top">
+          <span class="provider-pill">${escapeHtml(item.provider)}</span>
+          <span class="detail-summary-badge">${escapeHtml(timestamp)}</span>
+        </div>
+        <h4 class="detail-session-title detail-mono">${escapeHtml(item.id)}</h4>
+        <p class="detail-summary-subtitle">${escapeHtml(workspace)}</p>
+        <div class="detail-summary-chips">
+          ${summaryChips.map((entry) => `
+            <div class="detail-summary-chip">
+              <span>${escapeHtml(entry.label)}</span>
+              <strong>${escapeHtml(entry.value)}</strong>
+            </div>
+          `).join('')}
+        </div>
+      </section>
+
+      <section class="detail-meta-section">
+        <div class="detail-section-header">
+          <div>
+            <h4>${escapeHtml(t('detail.sections.metadata'))}</h4>
+            <p class="muted">${escapeHtml(t('detail.metadataHint'))}</p>
+          </div>
+        </div>
+        ${renderDetailMetaCards(metadataEntries)}
+      </section>
+
+      <section class="detail-prompts-section">
+        <div class="detail-section-header">
+          <div>
+            <h4>${escapeHtml(t('detail.fields.recentPrompts'))}</h4>
+            <p class="muted">${escapeHtml(t('detail.recentPromptsHint'))}</p>
+          </div>
+          <span class="detail-count-badge">${escapeHtml(formatPromptCount(prompts.length))}</span>
+        </div>
+        ${renderPromptStack(prompts, {
+          maxPrompts: prompts.length || 1,
+          contextKey: item.filePath,
+          expandable: true,
+          highlightQuery: state.search,
+          timeline: true
+        })}
+      </section>
+    </div>
+  `;
+}
+
+async function copyTextToClipboard(text) {
+  const value = String(text ?? '');
+  if (!value.trim()) {
+    throw new Error('empty-copy-value');
+  }
+
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = value;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+
+  const copied = document.execCommand('copy');
+  document.body.removeChild(textarea);
+
+  if (!copied) {
+    throw new Error('copy-command-failed');
+  }
+}
+
+async function handleCopyValue(value, label) {
+  try {
+    await copyTextToClipboard(value);
+    setMessage('success', t('messages.copiedValue', {
+      field: label || t('common.copy')
+    }));
+  } catch {
+    setMessage('error', t('messages.copyFailed'));
+  }
+}
+
+async function loadConfig() {
+  const payload = await fetchJson('/api/app-config');
+  state.locale = payload.locale;
+  state.localeOptions = payload.locales || [];
+  state.messages = payload.messages || {};
+
+  renderLanguageOptions();
+  applyStaticText();
+  syncUrlLocale();
+  savePreferences();
+}
+
+async function runBusyAction(action, callback) {
+  setBusy(action);
+  try {
+    return await callback();
+  } finally {
+    setBusy('');
+    renderStats();
+    renderSessions();
+    renderBackups();
+  }
+}
+
+async function loadSessionDetail(filePath) {
+  const requestId = state.detailRequestId + 1;
+  const focusClose = !state.isDetailOpen;
+  const sameSession = state.activeSessionPath === filePath;
+
+  state.detailRequestId = requestId;
+  state.isDetailOpen = true;
+  state.activeSessionPath = filePath;
+  state.activeSession = sameSession ? state.activeSession : null;
+  state.loadingSession = true;
+
+  syncDetailModalVisibility();
+  renderSessions();
+  renderSessionDetail();
+
+  if (focusClose) {
+    requestAnimationFrame(() => {
+      elements.sessionDetailClose?.focus();
+    });
+  }
+
+  try {
+    const payload = await fetchJson('/api/session', {
+      params: { path: filePath }
+    });
+
+    if (requestId !== state.detailRequestId || state.activeSessionPath !== filePath) {
+      return;
+    }
+
+    state.activeSession = payload.session;
+  } catch (error) {
+    if (requestId !== state.detailRequestId || state.activeSessionPath !== filePath) {
+      return;
+    }
+
+    state.activeSession = null;
+    setMessage('error', `${t('messages.sessionLoadFailed')} ${error.message}`);
+  } finally {
+    if (requestId !== state.detailRequestId || state.activeSessionPath !== filePath) {
+      return;
+    }
+
+    state.loadingSession = false;
+    renderSessions();
+    renderSessionDetail();
+  }
 }
 
 async function loadData() {
   clearMessage();
 
-  const query = new URLSearchParams({
-    includePreview: '1',
+  const query = {
+    includePreview: 1,
     provider: state.provider === 'all' ? '' : state.provider,
     search: state.search,
-    page: String(state.page),
-    limit: String(state.limit)
+    page: state.page,
+    limit: state.limit
+  };
+
+  await runBusyAction('loadingData', async () => {
+    const [overviewPayload, sessionsPayload, backupsPayload, doctorPayload] = await Promise.all([
+      fetchJson('/api/overview'),
+      fetchJson('/api/sessions', { params: query }),
+      fetchJson('/api/backups'),
+      fetchJson('/api/doctor')
+    ]);
+
+    state.overview = overviewPayload.overview;
+    state.providers = sessionsPayload.providers || [];
+    state.sessions = sessionsPayload.items || [];
+    state.totalMatching = sessionsPayload.total || 0;
+    state.page = sessionsPayload.page || 1;
+    state.totalPages = sessionsPayload.totalPages || 1;
+    state.backups = backupsPayload.backups || [];
+    state.doctor = doctorPayload.doctor;
+
+    renderProviderFilter();
+    renderProviderSuggestions();
+    renderStats();
+    renderSessions();
+    renderBackups();
+    renderDoctor();
+    renderPreview(state.lastPreview);
   });
 
-  const [overviewPayload, sessionsPayload, backupsPayload, doctorPayload] = await Promise.all([
-    fetchJson('/api/overview'),
-    fetchJson(`/api/sessions?${query.toString()}`),
-    fetchJson('/api/backups'),
-    fetchJson('/api/doctor')
-  ]);
+  if (state.isDetailOpen && state.activeSessionPath) {
+    await loadSessionDetail(state.activeSessionPath);
+  } else {
+    renderSessionDetail();
+  }
+}
 
-  state.overview = overviewPayload.overview;
-  state.providers = sessionsPayload.providers || [];
-  state.sessions = sessionsPayload.items || [];
-  state.totalMatching = sessionsPayload.total || 0;
-  state.page = sessionsPayload.page || 1;
-  state.totalPages = sessionsPayload.totalPages || 1;
-  state.backups = backupsPayload.backups || [];
-  state.doctor = doctorPayload.doctor;
+function getSelectionPayload() {
+  if (state.selected.size > 0) {
+    return {
+      filePaths: Array.from(state.selected)
+    };
+  }
 
-  renderStats();
-  renderProviderFilter();
-  renderSessions();
-  renderBackups();
-  renderDoctor();
+  return {
+    provider: state.provider === 'all' ? '' : state.provider,
+    search: state.search
+  };
+}
+
+function hasScopedSelection() {
+  return state.selected.size > 0 || state.provider !== 'all' || Boolean(state.search);
+}
+
+function clearPreview() {
+  state.lastPreview = null;
+  renderPreview(null);
 }
 
 async function handlePreview() {
   const targetProvider = elements.targetProviderInput.value.trim();
   if (!targetProvider) {
-    setMessage('error', 'Target provider is required.');
+    setMessage('error', t('messages.targetRequired'));
     return;
   }
 
   if (!hasScopedSelection()) {
-    setMessage('error', 'Select files or add a provider/search filter before previewing a migration.');
+    setMessage('error', t('messages.scopeRequiredPreview'));
     return;
   }
 
-  const payload = await fetchJson('/api/migrations/preview', {
+  const payload = await runBusyAction('previewing', () => fetchJson('/api/migrations/preview', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+    body: {
       selection: getSelectionPayload(),
       targetProvider
-    })
-  });
+    }
+  }));
 
-  renderPreview(payload.preview);
-  setMessage('success', `Preview ready for ${payload.preview.totalSelected} sessions.`);
+  state.lastPreview = payload.preview;
+  renderPreview(state.lastPreview);
+  setMessage('success', t('messages.previewReady', { count: payload.preview.totalSelected }));
+}
+
+function getBackupSuffix(label, value) {
+  if (!value) {
+    return '';
+  }
+  return ` ${label}: ${value}`;
 }
 
 async function handleRun() {
   const targetProvider = elements.targetProviderInput.value.trim();
   if (!targetProvider) {
-    setMessage('error', 'Target provider is required.');
+    setMessage('error', t('messages.targetRequired'));
     return;
   }
 
   if (!hasScopedSelection()) {
-    setMessage('error', 'Select files or add a provider/search filter before running a migration.');
+    setMessage('error', t('messages.scopeRequiredRun'));
     return;
   }
 
-  const scope = state.selected.size ? `${state.selected.size} selected sessions` : `${state.totalMatching} filtered sessions`;
-  const confirmed = window.confirm(`Run migration for ${scope} to "${targetProvider}"?`);
+  const scope = state.selected.size
+    ? t('common.filesCount', { count: state.selected.size })
+    : t('common.filesCount', { count: state.totalMatching });
+
+  const confirmed = window.confirm(t('messages.migrationConfirm', {
+    scope,
+    target: targetProvider
+  }));
+
   if (!confirmed) {
     return;
   }
 
-  const result = await fetchJson('/api/migrations/run', {
+  const result = await runBusyAction('migrating', () => fetchJson('/api/migrations/run', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+    body: {
       selection: getSelectionPayload(),
       targetProvider
-    })
-  });
+    }
+  }));
 
   state.selected.clear();
-  renderPreview(null);
-  setMessage('success', `Migration finished. ${result.migrated} migrated, ${result.skipped} skipped, ${result.failed} failed.${result.backupId ? ` Backup: ${result.backupId}` : ''}`);
+  clearPreview();
+  setMessage('success', t('messages.migrationFinished', {
+    migrated: result.migrated,
+    skipped: result.skipped,
+    failed: result.failed,
+    backupSuffix: getBackupSuffix(t('common.backup'), result.backupId)
+  }));
   await loadData();
 }
 
 async function handleRestore(backupId) {
-  const confirmed = window.confirm(`Restore sessions from backup "${backupId}"?`);
+  const confirmed = window.confirm(t('messages.restoreConfirm', {
+    backup: backupId
+  }));
+
   if (!confirmed) {
     return;
   }
 
-  const result = await fetchJson('/api/backups/restore', {
+  const result = await runBusyAction('restoring', () => fetchJson('/api/backups/restore', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ backupId })
-  });
+    body: { backupId }
+  }));
 
   state.selected.clear();
-  renderPreview(null);
-  setMessage('success', `Restore finished. ${result.restored} restored, ${result.failed} failed.`);
+  clearPreview();
+  setMessage('success', t('messages.restoreFinished', {
+    restored: result.restored,
+    failed: result.failed,
+    backupSuffix: getBackupSuffix(t('common.preRestoreBackup'), result.preRestoreBackupId)
+  }));
   await loadData();
 }
 
+async function handleRepairIndexes() {
+  const confirmed = window.confirm(t('messages.repairConfirm'));
+  if (!confirmed) {
+    return;
+  }
+
+  const payload = await runBusyAction('repairing', () => fetchJson('/api/indexes/repair', {
+    method: 'POST'
+  }));
+
+  clearPreview();
+  setMessage('success', t('messages.repairFinished', {
+    insertedThreads: payload.repair.insertedThreads,
+    updatedThreads: payload.repair.updatedThreads,
+    addedSessionIndexEntries: payload.repair.addedSessionIndexEntries,
+    failed: payload.repair.failed
+  }));
+  await loadData();
+}
+
+async function execute(task) {
+  try {
+    await task();
+  } catch (error) {
+    setMessage('error', error.message || t('messages.genericFailed'));
+  }
+}
+
 function bindEvents() {
-  elements.filterForm.addEventListener('submit', async (event) => {
+  elements.filterForm.addEventListener('submit', (event) => {
     event.preventDefault();
-    state.provider = elements.providerFilter.value || 'all';
-    state.search = elements.searchInput.value.trim();
-    state.limit = Number(elements.limitFilter.value) || 50;
-    state.page = 1;
-    await loadData();
+    execute(async () => {
+      state.provider = elements.providerFilter.value || 'all';
+      state.search = elements.searchInput.value.trim();
+      state.limit = Number(elements.limitFilter.value) || 50;
+      state.page = 1;
+      savePreferences();
+      clearPreview();
+      await loadData();
+    });
   });
 
-  elements.refreshButton.addEventListener('click', loadData);
-  elements.previewButton.addEventListener('click', handlePreview);
-  elements.runButton.addEventListener('click', handleRun);
+  elements.resetFiltersButton.addEventListener('click', () => {
+    execute(async () => {
+      state.provider = 'all';
+      state.search = '';
+      state.limit = 50;
+      state.page = 1;
+      state.selected.clear();
+      syncControlsFromState();
+      savePreferences();
+      clearPreview();
+      await loadData();
+    });
+  });
 
-  elements.prevPageButton.addEventListener('click', async () => {
+  elements.languageSelect.addEventListener('change', () => {
+    execute(async () => {
+      state.locale = normalizeLocale(elements.languageSelect.value);
+      savePreferences();
+      await loadConfig();
+      renderSelectionSummary();
+      renderPreview(state.lastPreview);
+      renderSessionDetail();
+      syncDetailModalVisibility();
+      await loadData();
+    });
+  });
+
+  elements.refreshButton.addEventListener('click', () => execute(loadData));
+  elements.repairIndexesButton.addEventListener('click', () => execute(handleRepairIndexes));
+  elements.previewButton.addEventListener('click', () => execute(handlePreview));
+  elements.runButton.addEventListener('click', () => execute(handleRun));
+
+  elements.prevPageButton.addEventListener('click', () => {
     if (state.page <= 1) {
       return;
     }
-    state.page -= 1;
-    await loadData();
+    execute(async () => {
+      state.page -= 1;
+      await loadData();
+    });
   });
 
-  elements.nextPageButton.addEventListener('click', async () => {
+  elements.nextPageButton.addEventListener('click', () => {
     if (state.page >= state.totalPages) {
       return;
     }
-    state.page += 1;
-    await loadData();
+    execute(async () => {
+      state.page += 1;
+      await loadData();
+    });
   });
 
   elements.selectPageButton.addEventListener('click', () => {
@@ -421,6 +1541,10 @@ function bindEvents() {
     renderSessions();
   });
 
+  elements.targetProviderInput.addEventListener('input', () => {
+    savePreferences();
+  });
+
   elements.sessionsTableBody.addEventListener('change', (event) => {
     const target = event.target;
     if (!target.classList.contains('row-selector')) {
@@ -432,28 +1556,132 @@ function bindEvents() {
     } else {
       state.selected.delete(target.value);
     }
+
     renderSelectionSummary();
+    elements.togglePageSelection.checked = state.sessions.every((item) => state.selected.has(item.filePath));
   });
 
-  elements.backupsList.addEventListener('click', async (event) => {
+  elements.sessionsTableBody.addEventListener('click', (event) => {
+    const target = event.target;
+    if (target.classList.contains('row-selector')) {
+      return;
+    }
+
+    const row = target.closest('tr[data-file-path]');
+    if (!row) {
+      return;
+    }
+
+    execute(() => loadSessionDetail(row.dataset.filePath));
+  });
+
+  elements.sessionsTableBody.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') {
+      return;
+    }
+
+    const target = event.target;
+    if (target.classList.contains('row-selector')) {
+      return;
+    }
+
+    const row = target.closest('tr[data-file-path]');
+    if (!row) {
+      return;
+    }
+
+    event.preventDefault();
+    execute(() => loadSessionDetail(row.dataset.filePath));
+  });
+
+  elements.sessionDetailBody.addEventListener('click', (event) => {
+    const copyButton = event.target.closest('[data-copy-value]');
+    if (copyButton) {
+      execute(() => handleCopyValue(copyButton.dataset.copyValue, copyButton.dataset.copyLabel));
+      return;
+    }
+
+    const button = event.target.closest('[data-prompt-toggle]');
+    if (!button) {
+      return;
+    }
+
+    const key = button.dataset.promptToggle;
+    if (!key) {
+      return;
+    }
+
+    if (state.expandedPrompts.has(key)) {
+      state.expandedPrompts.delete(key);
+    } else {
+      state.expandedPrompts.add(key);
+    }
+
+    renderSessionDetail();
+  });
+
+  elements.sessionDetailClose.addEventListener('click', () => {
+    closeSessionDetail();
+  });
+
+  elements.sessionDetailModal.addEventListener('click', (event) => {
+    if (event.target.classList.contains('detail-modal-backdrop')) {
+      closeSessionDetail();
+    }
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && state.isDetailOpen) {
+      event.preventDefault();
+      closeSessionDetail();
+    }
+  });
+
+  elements.backupsList.addEventListener('click', (event) => {
     const button = event.target.closest('.restore-button');
     if (!button) {
       return;
     }
-    await handleRestore(button.dataset.backupId);
+
+    execute(() => handleRestore(button.dataset.backupId));
+  });
+
+  elements.providerChips.addEventListener('click', (event) => {
+    const button = event.target.closest('.provider-chip-button');
+    if (!button) {
+      return;
+    }
+
+    execute(async () => {
+      state.provider = button.dataset.provider || 'all';
+      state.page = 1;
+      syncControlsFromState();
+      savePreferences();
+      clearPreview();
+      await loadData();
+    });
   });
 }
 
 async function init() {
-  elements.targetProviderInput.value = localStorage.getItem('codex-session-migrator:target-provider') || '';
-  elements.targetProviderInput.addEventListener('input', () => {
-    localStorage.setItem('codex-session-migrator:target-provider', elements.targetProviderInput.value.trim());
-  });
+  const preferences = loadPreferences();
+  state.provider = preferences.provider || 'all';
+  state.search = preferences.search || '';
+  state.limit = Number(preferences.limit) || 50;
 
+  elements.targetProviderInput.value = preferences.targetProvider || '';
+
+  await loadConfig();
+  syncControlsFromState();
+  renderSelectionSummary();
+  renderSessionDetail();
+  syncDetailModalVisibility();
   bindEvents();
   await loadData();
 }
 
 init().catch((error) => {
-  setMessage('error', error.message);
+  elements.messagePanel.className = 'message-panel error';
+  elements.messagePanel.textContent = error.message || 'Failed to initialize the app.';
+  elements.messagePanel.classList.remove('hidden');
 });

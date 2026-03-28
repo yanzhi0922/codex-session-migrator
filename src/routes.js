@@ -14,6 +14,14 @@ const {
   previewMigration,
   restoreFromBackup
 } = require('./migrator');
+const { repairSessionIndexes } = require('./session-indexes');
+const {
+  createTranslator,
+  getClientMessages,
+  getLocaleOptions,
+  normalizeLocale,
+  parseAcceptLanguage
+} = require('./i18n');
 
 function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, {
@@ -58,7 +66,9 @@ function readBody(req) {
       try {
         resolve(JSON.parse(body));
       } catch (error) {
-        reject(new Error('Request body must be valid JSON.'));
+        const invalidJsonError = new Error('Request body must be valid JSON.');
+        invalidJsonError.code = 'invalid_json';
+        reject(invalidJsonError);
       }
     });
     req.on('error', reject);
@@ -75,6 +85,14 @@ function parseListQuery(url) {
   };
 }
 
+function resolveRequestLocale(req, url, body = null) {
+  return normalizeLocale(
+    (body && body.lang) ||
+    url.searchParams.get('lang') ||
+    parseAcceptLanguage(req.headers['accept-language'])
+  );
+}
+
 function createRouter(sessionsDir) {
   const resolvedSessionsDir = getSessionsDir(sessionsDir);
 
@@ -85,6 +103,8 @@ function createRouter(sessionsDir) {
     }
 
     const url = new URL(req.url, 'http://127.0.0.1');
+    const locale = resolveRequestLocale(req, url);
+    const { t } = createTranslator(locale);
 
     try {
       if (req.method === 'GET' && url.pathname === '/api/health') {
@@ -96,10 +116,20 @@ function createRouter(sessionsDir) {
         return true;
       }
 
+      if (req.method === 'GET' && url.pathname === '/api/app-config') {
+        sendJson(res, 200, {
+          ok: true,
+          locale,
+          locales: getLocaleOptions(locale),
+          messages: getClientMessages(locale)
+        });
+        return true;
+      }
+
       if (req.method === 'GET' && url.pathname === '/api/overview') {
         sendJson(res, 200, {
           ok: true,
-          overview: getOverview(resolvedSessionsDir)
+          overview: getOverview(resolvedSessionsDir, { locale })
         });
         return true;
       }
@@ -115,7 +145,10 @@ function createRouter(sessionsDir) {
       if (req.method === 'GET' && url.pathname === '/api/sessions') {
         sendJson(res, 200, {
           ok: true,
-          ...scanSessions(resolvedSessionsDir, parseListQuery(url))
+          ...scanSessions(resolvedSessionsDir, {
+            ...parseListQuery(url),
+            locale
+          })
         });
         return true;
       }
@@ -123,13 +156,13 @@ function createRouter(sessionsDir) {
       if (req.method === 'GET' && url.pathname === '/api/session') {
         const filePath = url.searchParams.get('path');
         if (!filePath) {
-          sendError(res, 400, 'Missing required query parameter: path');
+          sendError(res, 400, t('errors.missingQueryPath'));
           return true;
         }
 
-        const detail = getSessionDetail(filePath, resolvedSessionsDir);
+        const detail = getSessionDetail(filePath, resolvedSessionsDir, { locale, t });
         if (!detail) {
-          sendError(res, 404, 'Session not found or session_meta could not be parsed.');
+          sendError(res, 404, t('errors.sessionNotFound'));
           return true;
         }
 
@@ -143,7 +176,7 @@ function createRouter(sessionsDir) {
       if (req.method === 'GET' && url.pathname === '/api/backups') {
         sendJson(res, 200, {
           ok: true,
-          backups: listBackups(resolvedSessionsDir)
+          backups: listBackups(resolvedSessionsDir, { locale })
         });
         return true;
       }
@@ -151,29 +184,38 @@ function createRouter(sessionsDir) {
       if (req.method === 'GET' && url.pathname === '/api/doctor') {
         sendJson(res, 200, {
           ok: true,
-          doctor: runDoctor(resolvedSessionsDir)
+          doctor: runDoctor(resolvedSessionsDir, { locale, t })
         });
         return true;
       }
 
       if (req.method === 'POST' && url.pathname === '/api/migrations/preview') {
         const body = await readBody(req);
+        const requestLocale = resolveRequestLocale(req, url, body);
+        const translator = createTranslator(requestLocale);
         if (!body.targetProvider) {
-          sendError(res, 400, 'targetProvider is required.');
+          sendError(res, 400, translator.t('errors.targetProviderRequired'));
           return true;
         }
 
         sendJson(res, 200, {
           ok: true,
-          preview: previewMigration(resolvedSessionsDir, body.selection || body, body.targetProvider)
+          preview: previewMigration(
+            resolvedSessionsDir,
+            body.selection || body,
+            body.targetProvider,
+            translator
+          )
         });
         return true;
       }
 
       if (req.method === 'POST' && url.pathname === '/api/migrations/run') {
         const body = await readBody(req);
+        const requestLocale = resolveRequestLocale(req, url, body);
+        const translator = createTranslator(requestLocale);
         if (!body.targetProvider) {
-          sendError(res, 400, 'targetProvider is required.');
+          sendError(res, 400, translator.t('errors.targetProviderRequired'));
           return true;
         }
 
@@ -181,23 +223,42 @@ function createRouter(sessionsDir) {
           resolvedSessionsDir,
           body.selection || body,
           body.targetProvider,
-          { dryRun: Boolean(body.dryRun) }
+          {
+            dryRun: Boolean(body.dryRun),
+            locale: translator.locale,
+            t: translator.t
+          }
         ));
         return true;
       }
 
       if (req.method === 'POST' && url.pathname === '/api/backups/restore') {
         const body = await readBody(req);
+        const requestLocale = resolveRequestLocale(req, url, body);
+        const translator = createTranslator(requestLocale);
         const backupDir = body.backupDir || body.backupId;
         if (!backupDir) {
-          sendError(res, 400, 'backupDir or backupId is required.');
+          sendError(res, 400, translator.t('errors.backupIdentifierRequired'));
           return true;
         }
 
-        sendJson(res, 200, restoreFromBackup(backupDir, resolvedSessionsDir));
+        sendJson(res, 200, restoreFromBackup(backupDir, resolvedSessionsDir, translator));
+        return true;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/indexes/repair') {
+        sendJson(res, 200, {
+          ok: true,
+          repair: repairSessionIndexes(resolvedSessionsDir)
+        });
         return true;
       }
     } catch (error) {
+      if (error && error.code === 'invalid_json') {
+        sendError(res, 400, t('errors.requestBodyJson'));
+        return true;
+      }
+
       sendError(res, 500, error.message);
       return true;
     }

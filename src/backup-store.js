@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { formatTimestamp, slugify } = require('./format');
+const { createTranslator } = require('./i18n');
 
 const BACKUP_ROOT_NAME = '__backups__';
 const FILES_DIR_NAME = 'files';
@@ -77,21 +78,25 @@ function createBackupSnapshot(sessionsDir, entries, metadata = {}) {
   };
 }
 
-function loadBackupManifest(backupDir) {
+function loadBackupManifest(backupDir, options = {}) {
+  const translator = typeof options.t === 'function'
+    ? { t: options.t }
+    : createTranslator(options.locale);
   const manifestPath = path.join(backupDir, MANIFEST_FILE_NAME);
   if (!fs.existsSync(manifestPath)) {
-    throw new Error(`Backup manifest not found: ${manifestPath}`);
+    throw new Error(translator.t('errors.backupManifestMissing', { path: manifestPath }));
   }
 
   return JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 }
 
-function listBackupSnapshots(sessionsDir) {
+function listBackupSnapshots(sessionsDir, options = {}) {
   const backupRoot = getBackupRoot(sessionsDir);
   if (!fs.existsSync(backupRoot)) {
     return [];
   }
 
+  const includeInvalid = Boolean(options.includeInvalid);
   const entries = fs.readdirSync(backupRoot, { withFileTypes: true });
   const results = [];
 
@@ -114,6 +119,10 @@ function listBackupSnapshots(sessionsDir) {
         entryCount: manifest.entryCount || (manifest.entries ? manifest.entries.length : 0)
       });
     } catch (error) {
+      if (!includeInvalid) {
+        continue;
+      }
+
       const stat = fs.statSync(backupDir);
       results.push({
         backupId: entry.name,

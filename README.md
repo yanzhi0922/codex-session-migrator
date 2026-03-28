@@ -1,8 +1,14 @@
 # Codex Session Migrator
 
+[![CI](https://github.com/yanzhi0922/codex-session-migrator/actions/workflows/test.yml/badge.svg)](https://github.com/yanzhi0922/codex-session-migrator/actions/workflows/test.yml)
+[![Release](https://img.shields.io/github/v/release/yanzhi0922/codex-session-migrator)](https://github.com/yanzhi0922/codex-session-migrator/releases)
+[![License](https://img.shields.io/github/license/yanzhi0922/codex-session-migrator)](https://github.com/yanzhi0922/codex-session-migrator/blob/main/LICENSE)
+
 Move Codex Desktop session history across model providers without losing your archive.
 
-`Codex Session Migrator` is a zero-dependency local toolkit for inspecting, migrating, backing up, and restoring Codex session files stored under `~/.codex/sessions`. It ships as both a browser UI and a CLI, and it is designed to be safe enough for real personal archives rather than one-off JSONL hacks.
+中文说明：这是一个用于管理 `~/.codex/sessions` 的本地工具，支持在不同 provider 之间迁移会话、自动备份、恢复快照，并且现在同时支持英文与简体中文界面。
+
+`Codex Session Migrator` is a zero-dependency local toolkit for inspecting, migrating, repairing, backing up, and restoring Codex session files stored under `~/.codex/sessions`. It ships as both a browser UI and a CLI, and it is designed to be safe enough for real personal archives rather than one-off JSONL hacks.
 
 ## Why this exists
 
@@ -11,23 +17,40 @@ Codex Desktop stores each conversation with a `model_provider` tag inside the fi
 This tool solves that with:
 
 - A local web app for browsing sessions by provider, search term, and path.
+- Built-in English / Simplified Chinese language switching for both the web UI and CLI.
 - Manifest-backed backups before every real migration.
 - Restore support that can roll back from any saved snapshot.
-- A `doctor` command that flags malformed session files.
+- A `doctor` command that flags malformed session files and missing SQLite thread indexes.
+- A `repair` command and web action that rebuild missing SQLite `threads` rows from live JSONL sessions.
 - A CLI for automation and scripting.
 - No runtime dependencies beyond Node.js.
 
 ## Features
 
-- Safe provider migration that rewrites only the `session_meta` line.
+- Safe provider migration that rewrites `session_meta` and keeps SQLite thread indexes in sync.
 - Explicit backup snapshots stored under `__backups__/.../manifest.json`.
 - Restore flow with pre-restore safety snapshots.
 - Browser UI with provider overview, searchable session table, migration preview, backup list, and health report.
-- CLI commands for `serve`, `list`, `stats`, `doctor`, `migrate`, `restore`, and `backups`.
+- Better UX with remembered filters, provider suggestion hints, clickable provider chips, and a session detail inspector.
+- CLI commands for `serve`, `list`, `stats`, `doctor`, `repair`, `migrate`, `restore`, and `backups`.
 - Protective guardrail against accidental full-library migration unless `--all` is explicitly used.
 - Works on Windows, macOS, and Linux.
 
 ## Quick start
+
+### Desktop users
+
+Download the latest Windows portable package from [GitHub Releases](https://github.com/yanzhi0922/codex-session-migrator/releases), unzip it, and double-click `Codex Session Migrator.cmd`.
+
+The packaged desktop build:
+
+- bundles its own Node.js runtime, so no separate install is required
+- opens the local app automatically in your browser
+- targets `~/.codex/sessions` by default
+- includes repair, migration, backup, restore, and health-check tools
+- includes dedicated one-click launchers for the browser UI, CLI, and index repair
+
+### Developers
 
 ```bash
 git clone https://github.com/yanzhi0922/codex-session-migrator.git
@@ -42,6 +65,8 @@ Then open:
 http://127.0.0.1:5730
 ```
 
+The web UI now remembers your language, filters, and preferred target provider across refreshes.
+
 The default sessions directory is:
 
 ```text
@@ -54,12 +79,21 @@ To override it:
 npm start -- --sessions-dir /path/to/sessions
 ```
 
+To start the CLI in Chinese:
+
+```bash
+codex-migrate stats --lang zh-CN
+```
+
+You can also switch the web UI language from the top-right language selector.
+
 ## CLI
 
 ### Start the local app
 
 ```bash
 codex-migrate serve --open
+codex-migrate serve --open --lang zh-CN
 ```
 
 ### List sessions
@@ -75,6 +109,15 @@ codex-migrate list --search traffic --json
 codex-migrate stats
 codex-migrate doctor
 codex-migrate backups
+codex-migrate repair
+```
+
+### Repair missing indexes
+
+If migrated sessions do not show up in CodexManager, rebuild the SQLite thread index:
+
+```bash
+codex-migrate repair
 ```
 
 ### Preview a migration
@@ -125,6 +168,7 @@ That means restore is based on a recorded manifest, not on guessing the right fi
 The local app exposes JSON endpoints:
 
 - `GET /api/overview`
+- `GET /api/app-config`
 - `GET /api/providers`
 - `GET /api/sessions`
 - `GET /api/session?path=...`
@@ -132,13 +176,14 @@ The local app exposes JSON endpoints:
 - `GET /api/doctor`
 - `POST /api/migrations/preview`
 - `POST /api/migrations/run`
+- `POST /api/indexes/repair`
 - `POST /api/backups/restore`
 
 ## Development
 
 Requirements:
 
-- Node.js `>= 18.17`
+- Node.js `>= 24`
 
 Run tests:
 
@@ -146,13 +191,22 @@ Run tests:
 npm test
 ```
 
+Build a portable Windows release:
+
+```bash
+npm ci
+npm run build:release:win
+```
+
 Current test coverage includes:
 
 - Session scanning and provider stats
 - Prompt preview extraction
+- English / Chinese localization paths
 - Malformed file detection
 - Migration preview safety guard
 - Backup-backed migration and restore
+- SQLite thread repair and metadata reconstruction
 - HTTP API smoke coverage
 
 ## Project structure

@@ -6,14 +6,31 @@ const crypto = require('crypto');
 const {
   getAllSessions,
   getSessionsDir,
+  parseFirstLine,
   validateProviderName,
   validateSessionPath
 } = require('./scanner');
+const { createTranslator } = require('./i18n');
 const {
   createBackupSnapshot,
   getBackupRoot,
   loadBackupManifest
 } = require('./backup-store');
+const {
+  repairSessionIndexes,
+  syncThreadProviderIndexes
+} = require('./session-indexes');
+
+function resolveTranslator(options = {}) {
+  if (typeof options.t === 'function') {
+    return {
+      locale: options.locale || 'en',
+      t: options.t
+    };
+  }
+
+  return createTranslator(options.locale);
+}
 
 function normalizeSelection(selection) {
   if (Array.isArray(selection)) {
@@ -26,10 +43,14 @@ function mapSessionsByPath(items) {
   return new Map(items.map((item) => [path.resolve(item.filePath), item]));
 }
 
-function resolveSelectedSessions(sessionsDir, selection) {
+function resolveSelectedSessions(sessionsDir, selection, options = {}) {
   const dir = getSessionsDir(sessionsDir);
   const normalizedSelection = normalizeSelection(selection);
-  const allItems = getAllSessions(dir, { includePreview: Boolean(normalizedSelection.search) });
+  const { locale, t } = resolveTranslator(options);
+  const allItems = getAllSessions(dir, {
+    includePreview: Boolean(normalizedSelection.search),
+    locale
+  });
   const byPath = mapSessionsByPath(allItems);
   const hasExplicitSelection = (
     Array.isArray(normalizedSelection.filePaths) && normalizedSelection.filePaths.length > 0
@@ -41,7 +62,7 @@ function resolveSelectedSessions(sessionsDir, selection) {
 
   if (Array.isArray(normalizedSelection.filePaths) && normalizedSelection.filePaths.length) {
     selected = normalizedSelection.filePaths.map((filePath) => {
-      const resolved = validateSessionPath(filePath, dir);
+      const resolved = validateSessionPath(filePath, dir, { t, locale });
       return byPath.get(resolved);
     }).filter(Boolean);
   } else if (Array.isArray(normalizedSelection.ids) && normalizedSelection.ids.length) {
@@ -49,7 +70,7 @@ function resolveSelectedSessions(sessionsDir, selection) {
     selected = allItems.filter((item) => idSet.has(item.id));
   } else {
     if (!hasExplicitSelection && !normalizedSelection.allowAll) {
-      throw new Error('Refusing to target every session without an explicit filter. Use --all or select files first.');
+      throw new Error(t('errors.fullLibraryRefused'));
     }
 
     if (normalizedSelection.provider && normalizedSelection.provider !== 'all') {
@@ -80,21 +101,22 @@ function readSessionFileParts(filePath) {
   };
 }
 
-function rewriteProviderInFile(filePath, targetProvider) {
+function rewriteProviderInFile(filePath, targetProvider, options = {}) {
+  const { t } = resolveTranslator(options);
   const { firstLine, newline, remainder } = readSessionFileParts(filePath);
   if (!firstLine) {
-    throw new Error('Session file is empty.');
+    throw new Error(t('errors.sessionFileEmpty'));
   }
 
   let record;
   try {
     record = JSON.parse(firstLine);
   } catch {
-    throw new Error('First line is not valid JSON.');
+    throw new Error(t('errors.firstLineInvalidJson'));
   }
 
   if (record.type !== 'session_meta' || !record.payload || typeof record.payload !== 'object') {
-    throw new Error('First line is not a session_meta record.');
+    throw new Error(t('errors.firstLineNotSessionMeta'));
   }
 
   const previousProvider = record.payload.model_provider || 'unknown';
@@ -119,9 +141,10 @@ function buildPreview(items, targetProvider) {
   }));
 }
 
-function previewMigration(sessionsDir, selection, targetProvider) {
-  const nextProvider = validateProviderName(targetProvider);
-  const items = resolveSelectedSessions(sessionsDir, selection);
+function previewMigration(sessionsDir, selection, targetProvider, options = {}) {
+  const { locale, t } = resolveTranslator(options);
+  const nextProvider = validateProviderName(targetProvider, { t, locale });
+  const items = resolveSelectedSessions(sessionsDir, selection, { t, locale });
   const preview = buildPreview(items, nextProvider);
 
   return {
@@ -135,9 +158,10 @@ function previewMigration(sessionsDir, selection, targetProvider) {
 }
 
 function migrateSessions(sessionsDir, selection, targetProvider, options = {}) {
-  const nextProvider = validateProviderName(targetProvider);
+  const { locale, t } = resolveTranslator(options);
+  const nextProvider = validateProviderName(targetProvider, { t, locale });
   const dir = getSessionsDir(sessionsDir);
-  const items = resolveSelectedSessions(dir, selection);
+  const items = resolveSelectedSessions(dir, selection, { t, locale });
   const preview = buildPreview(items, nextProvider);
   const actionableItems = items.filter((item) => item.provider !== nextProvider);
 
@@ -192,7 +216,22 @@ function migrateSessions(sessionsDir, selection, targetProvider, options = {}) {
     }
 
     try {
-      const previousProvider = rewriteProviderInFile(item.filePath, nextProvider);
+      const previousProvider = rewriteProviderInFile(item.filePath, nextProvider, { t, locale });
+      try {
+        repairSessionIndexes(dir, {
+          filePaths: [item.filePath]
+        });
+      } catch (error) {
+        rewriteProviderInFile(item.filePath, previousProvider, { t, locale });
+        try {
+          repairSessionIndexes(dir, {
+            filePaths: [item.filePath]
+          });
+        } catch {
+        }
+        throw error;
+      }
+
       results.push({
         relativePath: item.relativePath,
         filePath: item.filePath,
@@ -229,10 +268,11 @@ function migrateSessions(sessionsDir, selection, targetProvider, options = {}) {
   };
 }
 
-function resolveBackupDir(backupDirOrId, sessionsDir) {
+function resolveBackupDir(backupDirOrId, sessionsDir, options = {}) {
+  const { t } = resolveTranslator(options);
   const input = String(backupDirOrId || '').trim();
   if (!input) {
-    throw new Error('Backup directory or backup id is required.');
+    throw new Error(t('errors.backupDirRequired'));
   }
 
   if (path.isAbsolute(input)) {
@@ -242,10 +282,11 @@ function resolveBackupDir(backupDirOrId, sessionsDir) {
   return path.join(getBackupRoot(getSessionsDir(sessionsDir)), input);
 }
 
-function restoreFromBackup(backupDirOrId, sessionsDir) {
+function restoreFromBackup(backupDirOrId, sessionsDir, options = {}) {
+  const { locale, t } = resolveTranslator(options);
   const dir = getSessionsDir(sessionsDir);
-  const backupDir = resolveBackupDir(backupDirOrId, dir);
-  const manifest = loadBackupManifest(backupDir);
+  const backupDir = resolveBackupDir(backupDirOrId, dir, { t, locale });
+  const manifest = loadBackupManifest(backupDir, { locale, t });
 
   const liveEntries = manifest.entries.map((entry) => ({
     id: entry.id,
@@ -276,6 +317,12 @@ function restoreFromBackup(backupDirOrId, sessionsDir) {
 
       fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
       fs.copyFileSync(sourcePath, destinationPath);
+      const restoredMeta = parseFirstLine(destinationPath);
+      if (restoredMeta && restoredMeta.model_provider) {
+        repairSessionIndexes(dir, {
+          filePaths: [destinationPath]
+        });
+      }
 
       results.push({
         relativePath: entry.relativePath,
@@ -307,5 +354,6 @@ module.exports = {
   migrateSessions,
   previewMigration,
   resolveSelectedSessions,
-  restoreFromBackup
+  restoreFromBackup,
+  syncThreadProviderIndexes
 };

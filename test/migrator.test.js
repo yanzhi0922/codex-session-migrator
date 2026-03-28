@@ -3,7 +3,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
-const { createTempSessionsDir, writeSessionFile } = require('./helpers');
+const {
+  createTempSessionsDir,
+  createTempStateDb,
+  readThreadProvider,
+  writeSessionFile
+} = require('./helpers');
 const { parseFirstLine } = require('../src/scanner');
 const { migrateSessions, previewMigration, restoreFromBackup } = require('../src/migrator');
 
@@ -16,12 +21,26 @@ test('previewMigration refuses to target every session without an explicit scope
   }, /Refusing to target every session/i);
 });
 
-test('migrateSessions rewrites provider and creates a restorable backup manifest', () => {
+test('previewMigration can return localized validation errors', () => {
   const { sessionsDir } = createTempSessionsDir();
+  writeSessionFile(sessionsDir, path.join('2026', '03', '28', 'one.jsonl'));
+
+  assert.throws(() => {
+    previewMigration(sessionsDir, {}, 'crs', { locale: 'zh-CN' });
+  }, /拒绝|筛选条件|会话库/);
+});
+
+test('migrateSessions rewrites provider and creates a restorable backup manifest', () => {
+  const { root, sessionsDir } = createTempSessionsDir();
   const filePath = writeSessionFile(sessionsDir, path.join('2026', '03', '28', 'one.jsonl'), {
     provider: 'openai',
     id: 'session-one'
   });
+  const stateDbPath = createTempStateDb(root, [{
+    id: 'session-one',
+    rolloutPath: filePath,
+    modelProvider: 'openai'
+  }]);
 
   const result = migrateSessions(sessionsDir, { filePaths: [filePath] }, 'crs');
 
@@ -29,8 +48,31 @@ test('migrateSessions rewrites provider and creates a restorable backup manifest
   assert.equal(result.failed, 0);
   assert.ok(result.backupId);
   assert.equal(parseFirstLine(filePath).model_provider, 'crs');
+  assert.equal(readThreadProvider(stateDbPath, 'session-one'), 'crs');
 
   const restored = restoreFromBackup(result.backupId, sessionsDir);
   assert.equal(restored.restored, 1);
   assert.equal(parseFirstLine(filePath).model_provider, 'openai');
+  assert.equal(readThreadProvider(stateDbPath, 'session-one'), 'openai');
+});
+
+test('migrateSessions repairs missing thread rows and session index entries', () => {
+  const { root, sessionsDir } = createTempSessionsDir();
+  const filePath = writeSessionFile(sessionsDir, path.join('2026', '03', '28', 'missing-thread.jsonl'), {
+    provider: 'openai',
+    id: 'session-missing-thread'
+  });
+  const stateDbPath = createTempStateDb(root, []);
+
+  const result = migrateSessions(sessionsDir, { filePaths: [filePath] }, 'crs');
+
+  assert.equal(result.migrated, 1);
+  assert.equal(result.failed, 0);
+  assert.equal(parseFirstLine(filePath).model_provider, 'crs');
+  assert.equal(readThreadProvider(stateDbPath, 'session-missing-thread'), 'crs');
+
+  const restored = restoreFromBackup(result.backupId, sessionsDir);
+  assert.equal(restored.restored, 1);
+  assert.equal(parseFirstLine(filePath).model_provider, 'openai');
+  assert.equal(readThreadProvider(stateDbPath, 'session-missing-thread'), 'openai');
 });

@@ -1,21 +1,24 @@
 {
   "name": "codex-session-migrator",
-  "version": "2.0.0",
-  "description": "A release-ready Codex session migration toolkit with a local web app, CLI, backups, restore, and health checks.",
-  "main": "src/server.js",
+  "version": "3.0.0",
+  "description": "A polished Codex session migration toolkit with a local web app, CLI, repair tools, backups, restore, and portable one-click desktop releases.",
+  "main": "src/cli.js",
   "bin": {
     "codex-migrate": "src/cli.js"
   },
   "scripts": {
-    "start": "node src/cli.js serve",
-    "serve": "node src/cli.js serve",
-    "list": "node src/cli.js list",
-    "stats": "node src/cli.js stats",
-    "doctor": "node src/cli.js doctor",
-    "migrate": "node src/cli.js migrate",
-    "restore": "node src/cli.js restore",
-    "backups": "node src/cli.js backups",
-    "test": "node --test"
+    "start": "node --disable-warning=ExperimentalWarning src/cli.js serve",
+    "serve": "node --disable-warning=ExperimentalWarning src/cli.js serve",
+    "list": "node --disable-warning=ExperimentalWarning src/cli.js list",
+    "stats": "node --disable-warning=ExperimentalWarning src/cli.js stats",
+    "doctor": "node --disable-warning=ExperimentalWarning src/cli.js doctor",
+    "repair": "node --disable-warning=ExperimentalWarning src/cli.js repair",
+    "migrate": "node --disable-warning=ExperimentalWarning src/cli.js migrate",
+    "restore": "node --disable-warning=ExperimentalWarning src/cli.js restore",
+    "backups": "node --disable-warning=ExperimentalWarning src/cli.js backups",
+    "test": "node --disable-warning=ExperimentalWarning --test",
+    "build:portable:win": "node scripts/create-portable-bundle.js",
+    "build:release:win": "npm run build:portable:win"
   },
   "keywords": [
     "codex",
@@ -29,7 +32,7 @@
   ],
   "license": "MIT",
   "engines": {
-    "node": ">=18.17.0"
+    "node": ">=24.0.0"
   },
   "repository": {
     "type": "git",

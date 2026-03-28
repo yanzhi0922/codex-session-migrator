@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 'use strict';
 
-const { exec } = require('child_process');
+const { exec, spawn } = require('child_process');
 const readline = require('readline');
 const { startServer } = require('./server');
-const { formatTimestamp } = require('./format');
-const { getOverview, listBackups, runDoctor, scanSessions } = require('./scanner');
+const { createTranslator, resolveLocale } = require('./i18n');
+const { getOverview, getSessionsDir, listBackups, runDoctor, scanSessions } = require('./scanner');
 const { migrateSessions, previewMigration, restoreFromBackup } = require('./migrator');
+const { repairSessionIndexes } = require('./session-indexes');
 
 function parseArgs(argv) {
   const result = { command: '', flags: {}, positional: [] };
@@ -62,42 +63,73 @@ function toSelection(flags) {
   };
 }
 
-function printHelp() {
-  console.log(`
-Codex Session Migrator
+function resolveCliLocale(flags = {}) {
+  return resolveLocale(
+    flags.lang,
+    process.env.CODEX_SESSION_MIGRATOR_LANG,
+    process.env.LC_ALL,
+    process.env.LANG,
+    Intl.DateTimeFormat().resolvedOptions().locale
+  );
+}
 
-Usage:
-  codex-migrate <command> [options]
+function getCliI18n(flags = {}) {
+  return createTranslator(resolveCliLocale(flags));
+}
 
-Commands:
-  serve      Start the local web app
-  list       List sessions
-  stats      Show provider and storage overview
-  doctor     Check for invalid or suspicious session files
-  backups    List backup snapshots
-  migrate    Re-tag sessions to a new provider
-  restore    Restore sessions from a backup snapshot
-
-Common flags:
-  --sessions-dir <path>   Override the Codex sessions directory
-  --json                  Print JSON output when supported
-  --all                   Allow full-library migration when no filters are set
-
-Examples:
-  codex-migrate serve --open
-  codex-migrate list --provider openai --limit 20
-  codex-migrate migrate --provider openai --target crs --dry-run
-  codex-migrate restore --backup 20260328180102-migration-ab12cd --yes
-`);
+function printHelp(flags = {}) {
+  const { t } = getCliI18n(flags);
+  console.log([
+    '',
+    t('cli.help.title'),
+    '',
+    t('cli.help.usage'),
+    t('cli.help.usageValue'),
+    '',
+    t('cli.help.commands'),
+    t('cli.help.commandServe'),
+    t('cli.help.commandList'),
+    t('cli.help.commandStats'),
+    t('cli.help.commandDoctor'),
+    t('cli.help.commandBackups'),
+    t('cli.help.commandMigrate'),
+    t('cli.help.commandRepair'),
+    t('cli.help.commandRestore'),
+    '',
+    t('cli.help.commonFlags'),
+    t('cli.help.flagSessionsDir'),
+    t('cli.help.flagJson'),
+    t('cli.help.flagAll'),
+    t('cli.help.flagLang'),
+    '',
+    t('cli.help.examples'),
+    t('cli.help.exampleServe'),
+    t('cli.help.exampleList'),
+    t('cli.help.exampleMigrate'),
+    t('cli.help.exampleRepair'),
+    t('cli.help.exampleRestore'),
+    ''
+  ].join('\n'));
 }
 
 function openInBrowser(url) {
-  const command =
-    process.platform === 'win32' ? `start ${url}` :
-    process.platform === 'darwin' ? `open ${url}` :
-    `xdg-open ${url}`;
+  if (process.platform === 'win32') {
+    spawn('cmd', ['/c', 'start', '', url], {
+      detached: true,
+      stdio: 'ignore'
+    }).unref();
+    return;
+  }
 
-  exec(command);
+  if (process.platform === 'darwin') {
+    spawn('open', [url], {
+      detached: true,
+      stdio: 'ignore'
+    }).unref();
+    return;
+  }
+
+  exec(`xdg-open "${url}"`);
 }
 
 function confirmPrompt(message) {
@@ -114,9 +146,10 @@ function confirmPrompt(message) {
   });
 }
 
-function printSessions(result) {
-  console.log(`Sessions directory: ${result.sessionsDir}`);
-  console.log(`Total matching: ${result.total} / ${result.totals.all}`);
+function printSessions(result, flags = {}) {
+  const { t } = getCliI18n(flags);
+  console.log(`${t('cli.labels.sessionsDirectory')}: ${result.sessionsDir}`);
+  console.log(`${t('cli.labels.totalMatching')}: ${result.total} / ${result.totals.all}`);
   console.log('');
   for (const provider of result.providers) {
     console.log(`  ${provider.name.padEnd(18)} ${provider.count}`);
@@ -125,19 +158,22 @@ function printSessions(result) {
 
   for (const item of result.items) {
     const preview = item.preview ? ` | ${item.preview}` : '';
-    console.log(`[${item.provider}] ${item.timestampDisplay || item.timestamp || 'unknown'} | ${item.relativePath}${preview}`);
+    console.log(`[${item.provider}] ${item.timestampDisplay || item.timestamp || t('cli.table.unknown')} | ${item.relativePath}${preview}`);
   }
 }
 
 async function handleServe(flags) {
+  const { locale, t } = getCliI18n(flags);
   const server = await startServer({
     host: flags.host || '127.0.0.1',
     port: flags.port || process.env.PORT || 5730,
-    sessionsDir: flags['sessions-dir']
+    sessionsDir: flags['sessions-dir'],
+    maxPortAttempts: flags['port-attempts'] ? Number(flags['port-attempts']) : 10
   });
 
-  console.log(`Codex Session Migrator listening on ${server.url}`);
-  console.log(`Sessions directory: ${server.sessionsDir}`);
+  console.log(t('cli.status.listening', { url: server.url }));
+  console.log(`${t('cli.labels.sessionsDirectory')}: ${server.sessionsDir}`);
+  console.log(`${t('cli.labels.language')}: ${locale}`);
 
   if (flags.open) {
     openInBrowser(server.url);
@@ -145,12 +181,14 @@ async function handleServe(flags) {
 }
 
 function handleList(flags) {
+  const { locale } = getCliI18n(flags);
   const result = scanSessions(flags['sessions-dir'], {
     provider: flags.provider || '',
     search: flags.search || '',
     page: flags.page ? Number(flags.page) : 1,
     limit: flags.limit ? Number(flags.limit) : 50,
-    includePreview: true
+    includePreview: true,
+    locale
   });
 
   if (flags.json) {
@@ -158,22 +196,23 @@ function handleList(flags) {
     return;
   }
 
-  printSessions(result);
+  printSessions(result, flags);
 }
 
 function handleStats(flags) {
-  const overview = getOverview(flags['sessions-dir']);
+  const { locale, t } = getCliI18n(flags);
+  const overview = getOverview(flags['sessions-dir'], { locale });
   if (flags.json) {
     console.log(JSON.stringify(overview, null, 2));
     return;
   }
 
-  console.log(`Sessions directory: ${overview.sessionsDir}`);
-  console.log(`Sessions: ${overview.totals.sessions}`);
-  console.log(`Providers: ${overview.totals.providers}`);
-  console.log(`Backups: ${overview.totals.backups}`);
-  console.log(`Disk usage: ${overview.totals.bytesDisplay}`);
-  console.log(`Latest session: ${overview.latestSessionAtDisplay || 'unknown'}`);
+  console.log(`${t('cli.labels.sessionsDirectory')}: ${overview.sessionsDir}`);
+  console.log(`${t('cli.labels.sessions')}: ${overview.totals.sessions}`);
+  console.log(`${t('cli.labels.providers')}: ${overview.totals.providers}`);
+  console.log(`${t('cli.labels.backups')}: ${overview.totals.backups}`);
+  console.log(`${t('cli.labels.diskUsage')}: ${overview.totals.bytesDisplay}`);
+  console.log(`${t('cli.labels.latestSession')}: ${overview.latestSessionAtDisplay || t('cli.table.unknown')}`);
   console.log('');
   for (const provider of overview.providers) {
     console.log(`  ${provider.name.padEnd(18)} ${provider.count}`);
@@ -181,19 +220,23 @@ function handleStats(flags) {
 }
 
 function handleDoctor(flags) {
-  const doctor = runDoctor(flags['sessions-dir']);
+  const { locale, t } = getCliI18n(flags);
+  const doctor = runDoctor(flags['sessions-dir'], { locale, t });
   if (flags.json) {
     console.log(JSON.stringify(doctor, null, 2));
     return;
   }
 
-  console.log(`Sessions directory: ${doctor.sessionsDir}`);
-  console.log(`Healthy: ${doctor.ok ? 'yes' : 'no'}`);
-  console.log(`Invalid meta files: ${doctor.summary.invalidMetaCount}`);
-  console.log(`Missing provider: ${doctor.summary.missingProviderCount}`);
-  console.log(`Duplicate ids: ${doctor.summary.duplicateIdCount}`);
-  console.log(`Backups: ${doctor.summary.backupCount}`);
-  console.log(`Range: ${doctor.summary.oldestTimestampDisplay || 'unknown'} -> ${doctor.summary.latestTimestampDisplay || 'unknown'}`);
+  console.log(`${t('cli.labels.sessionsDirectory')}: ${doctor.sessionsDir}`);
+  console.log(`${t('cli.labels.healthy')}: ${doctor.ok ? t('web.doctor.healthy') : t('web.doctor.needsAttention')}`);
+  console.log(`${t('cli.labels.invalidMetaFiles')}: ${doctor.summary.invalidMetaCount}`);
+  console.log(`${t('cli.labels.missingProvider')}: ${doctor.summary.missingProviderCount}`);
+  console.log(`${t('cli.labels.duplicateIds')}: ${doctor.summary.duplicateIdCount}`);
+  console.log(`${t('cli.labels.missingThreads')}: ${doctor.summary.missingThreadCount}`);
+  console.log(`${t('cli.labels.providerMismatches')}: ${doctor.summary.providerMismatchCount}`);
+  console.log(`${t('cli.labels.missingSessionIndex')}: ${doctor.summary.missingSessionIndexCount}`);
+  console.log(`${t('cli.labels.backups')}: ${doctor.summary.backupCount}`);
+  console.log(`${t('cli.labels.range')}: ${doctor.summary.oldestTimestampDisplay || t('cli.table.unknown')} -> ${doctor.summary.latestTimestampDisplay || t('cli.table.unknown')}`);
 
   if (doctor.issues.length) {
     console.log('');
@@ -204,39 +247,46 @@ function handleDoctor(flags) {
 }
 
 function handleBackups(flags) {
-  const backups = listBackups(flags['sessions-dir']);
+  const { locale, t } = getCliI18n(flags);
+  const backups = listBackups(flags['sessions-dir'], { locale });
   if (flags.json) {
     console.log(JSON.stringify(backups, null, 2));
     return;
   }
 
   if (!backups.length) {
-    console.log('No backups found.');
+    console.log(t('cli.labels.noBackups'));
     return;
   }
 
   for (const backup of backups) {
-    console.log(`${backup.backupId} | ${formatTimestamp(backup.createdAt) || backup.createdAt} | ${backup.entryCount} files | ${backup.label}`);
+    console.log(t('cli.backupsLine', {
+      backupId: backup.backupId,
+      createdAt: backup.createdAtDisplay || backup.createdAt,
+      entryCount: backup.entryCount,
+      label: backup.label
+    }));
   }
 }
 
 async function handleMigrate(flags) {
+  const { locale, t } = getCliI18n(flags);
   if (!flags.target) {
-    throw new Error('--target is required for migrate.');
+    throw new Error(t('cli.errors.targetRequired'));
   }
 
   const selection = toSelection(flags);
-  const preview = previewMigration(flags['sessions-dir'], selection, flags.target);
+  const preview = previewMigration(flags['sessions-dir'], selection, flags.target, { locale, t });
 
   if (flags.json && flags['dry-run']) {
     console.log(JSON.stringify(preview, null, 2));
     return;
   }
 
-  console.log(`Selected sessions: ${preview.totalSelected}`);
-  console.log(`Actionable: ${preview.actionable}`);
-  console.log(`Skipped: ${preview.skipped}`);
-  console.log(`Target provider: ${preview.targetProvider}`);
+  console.log(`${t('cli.labels.selectedSessions')}: ${preview.totalSelected}`);
+  console.log(`${t('cli.labels.actionable')}: ${preview.actionable}`);
+  console.log(`${t('cli.labels.skipped')}: ${preview.skipped}`);
+  console.log(`${t('cli.labels.targetProvider')}: ${preview.targetProvider}`);
 
   if (!preview.totalSelected) {
     return;
@@ -245,20 +295,27 @@ async function handleMigrate(flags) {
   if (flags['dry-run']) {
     console.log('');
     for (const item of preview.items.slice(0, 50)) {
-      console.log(`${item.skipped ? '[skip]' : '[plan]'} ${item.relativePath} | ${item.from} -> ${item.to}`);
+      console.log(`${item.skipped ? t('cli.table.skip') : t('cli.table.plan')} ${item.relativePath} | ${item.from} -> ${item.to}`);
     }
     return;
   }
 
   if (!flags.yes) {
-    const confirmed = await confirmPrompt(`Migrate ${preview.actionable} sessions to "${preview.targetProvider}"?`);
+    const confirmed = await confirmPrompt(t('cli.confirm.migrate', {
+      count: preview.actionable,
+      provider: preview.targetProvider
+    }));
     if (!confirmed) {
-      console.log('Cancelled.');
+      console.log(t('cli.status.cancelled'));
       return;
     }
   }
 
-  const result = migrateSessions(flags['sessions-dir'], selection, flags.target, { dryRun: false });
+  const result = migrateSessions(flags['sessions-dir'], selection, flags.target, {
+    dryRun: false,
+    locale,
+    t
+  });
   if (flags.json) {
     console.log(JSON.stringify(result, null, 2));
     return;
@@ -266,51 +323,80 @@ async function handleMigrate(flags) {
 
   console.log('');
   for (const item of result.results.slice(0, 100)) {
-    const status = item.ok ? (item.skipped ? '[skip]' : '[done]') : '[fail]';
+    const status = item.ok ? (item.skipped ? t('cli.table.skip') : t('cli.table.done')) : t('cli.table.fail');
     console.log(`${status} ${item.relativePath} | ${item.from} -> ${item.to}${item.error ? ` | ${item.error}` : ''}`);
   }
   console.log('');
-  console.log(`Migrated: ${result.migrated}`);
-  console.log(`Skipped: ${result.skipped}`);
-  console.log(`Failed: ${result.failed}`);
+  console.log(`${t('cli.labels.migrated')}: ${result.migrated}`);
+  console.log(`${t('cli.labels.skipped')}: ${result.skipped}`);
+  console.log(`${t('cli.labels.failed')}: ${result.failed}`);
   if (result.backupId) {
-    console.log(`Backup: ${result.backupId}`);
+    console.log(`${t('cli.labels.backup')}: ${result.backupId}`);
   }
 }
 
 async function handleRestore(flags) {
+  const { locale, t } = getCliI18n(flags);
   if (!flags.backup) {
-    throw new Error('--backup is required for restore.');
+    throw new Error(t('cli.errors.backupRequired'));
   }
 
   if (!flags.yes) {
-    const confirmed = await confirmPrompt(`Restore sessions from "${flags.backup}"?`);
+    const confirmed = await confirmPrompt(t('cli.confirm.restore', {
+      backup: flags.backup
+    }));
     if (!confirmed) {
-      console.log('Cancelled.');
+      console.log(t('cli.status.cancelled'));
       return;
     }
   }
 
-  const result = restoreFromBackup(flags.backup, flags['sessions-dir']);
+  const result = restoreFromBackup(flags.backup, flags['sessions-dir'], { locale, t });
   if (flags.json) {
     console.log(JSON.stringify(result, null, 2));
     return;
   }
 
   for (const item of result.results.slice(0, 100)) {
-    console.log(`${item.ok ? '[done]' : '[fail]'} ${item.relativePath}${item.error ? ` | ${item.error}` : ''}`);
+    console.log(`${item.ok ? t('cli.table.done') : t('cli.table.fail')} ${item.relativePath}${item.error ? ` | ${item.error}` : ''}`);
   }
   console.log('');
-  console.log(`Restored: ${result.restored}`);
-  console.log(`Failed: ${result.failed}`);
+  console.log(`${t('cli.labels.restored')}: ${result.restored}`);
+  console.log(`${t('cli.labels.failed')}: ${result.failed}`);
   if (result.preRestoreBackupId) {
-    console.log(`Pre-restore backup: ${result.preRestoreBackupId}`);
+    console.log(`${t('cli.labels.preRestoreBackup')}: ${result.preRestoreBackupId}`);
+  }
+}
+
+function handleRepair(flags) {
+  const { t } = getCliI18n(flags);
+  const result = repairSessionIndexes(getSessionsDir(flags['sessions-dir']));
+
+  if (flags.json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  console.log(`${t('cli.labels.sessionsDirectory')}: ${result.sessionsDir}`);
+  console.log(`${t('cli.labels.scanned')}: ${result.scanned}`);
+  console.log(`${t('cli.labels.insertedThreads')}: ${result.insertedThreads}`);
+  console.log(`${t('cli.labels.updatedIndexes')}: ${result.updatedThreads}`);
+  console.log(`${t('cli.labels.addedSessionIndex')}: ${result.addedSessionIndexEntries}`);
+  console.log(`${t('cli.labels.failed')}: ${result.failed}`);
+  console.log('');
+
+  for (const item of result.results.slice(0, 100)) {
+    console.log(`${item.ok ? t('cli.table.done') : t('cli.table.fail')} ${item.relativePath}${item.error ? ` | ${item.error}` : ''}`);
   }
 }
 
 async function main() {
   const { command, flags } = parseArgs(process.argv.slice(2));
-  const action = command || 'help';
+  const action = command || (process.pkg ? 'serve' : 'help');
+
+  if (process.pkg && !command && flags.open === undefined) {
+    flags.open = true;
+  }
 
   switch (action) {
     case 'serve':
@@ -331,6 +417,9 @@ async function main() {
     case 'migrate':
       await handleMigrate(flags);
       break;
+    case 'repair':
+      handleRepair(flags);
+      break;
     case 'restore':
       await handleRestore(flags);
       break;
@@ -338,7 +427,7 @@ async function main() {
     case '--help':
     case '-h':
     default:
-      printHelp();
+      printHelp(flags);
       break;
   }
 }

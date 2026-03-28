@@ -4,34 +4,45 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Session Migrator</title>
-    <meta name="description" content="Inspect, migrate, back up, and restore Codex sessions across model providers.">
+    <meta
+      name="description"
+      content="Inspect, migrate, back up, and restore Codex sessions across model providers."
+    >
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/styles.css">
+    <link rel="stylesheet" href="/styles.css?v=20260328d">
   </head>
   <body>
     <div class="page-shell">
       <header class="hero">
         <div class="hero-copy">
-          <p class="eyebrow">Codex Session Migrator</p>
-          <h1>Move Codex history across providers without breaking your archive.</h1>
-          <p class="hero-text">
+          <p class="eyebrow" data-i18n="hero.eyebrow">Codex Session Migrator</p>
+          <h1 data-i18n="hero.title">Move Codex history across providers without breaking your archive.</h1>
+          <p class="hero-text" data-i18n="hero.text">
             A local-first migration console for Codex Desktop session stores. Inspect providers, batch-retag sessions,
             create backup snapshots, and restore safely from a manifest-backed history.
           </p>
         </div>
+
         <div class="hero-panel">
+          <label class="field compact-field">
+            <span data-i18n="hero.language">Language</span>
+            <select id="languageSelect"></select>
+          </label>
+
           <div class="hero-stat">
-            <span class="hero-stat-label">Sessions Directory</span>
+            <span class="hero-stat-label" data-i18n="hero.sessionsDir">Sessions Directory</span>
             <strong id="sessionsDir">Loading...</strong>
           </div>
+
           <div class="hero-stat">
-            <span class="hero-stat-label">Latest Session</span>
+            <span class="hero-stat-label" data-i18n="hero.latestSession">Latest Session</span>
             <strong id="latestSessionAt">Loading...</strong>
           </div>
+
           <div class="hero-actions">
-            <button id="refreshButton" class="button button-primary">Refresh</button>
-            <button id="selectPageButton" class="button button-secondary">Select Page</button>
-            <button id="clearSelectionButton" class="button button-ghost">Clear</button>
+            <button id="refreshButton" class="button button-primary" type="button" data-i18n="hero.actions.refresh">Refresh</button>
+            <button id="selectPageButton" class="button button-secondary" type="button" data-i18n="hero.actions.selectPage">Select Page</button>
+            <button id="clearSelectionButton" class="button button-ghost" type="button" data-i18n="hero.actions.clear">Clear</button>
           </div>
         </div>
       </header>
@@ -40,10 +51,11 @@
         <section class="panel stats-panel">
           <div class="panel-header">
             <div>
-              <p class="eyebrow">Overview</p>
-              <h2>Current footprint</h2>
+              <p class="eyebrow" data-i18n="overview.eyebrow">Overview</p>
+              <h2 data-i18n="overview.title">Current footprint</h2>
             </div>
           </div>
+
           <div id="statsGrid" class="stats-grid"></div>
           <div id="providerChips" class="provider-chips"></div>
         </section>
@@ -51,22 +63,30 @@
         <section class="panel controls-panel">
           <div class="panel-header">
             <div>
-              <p class="eyebrow">Selection</p>
-              <h2>Filter and queue a migration</h2>
+              <p class="eyebrow" data-i18n="selection.eyebrow">Selection</p>
+              <h2 data-i18n="selection.title">Filter and queue a migration</h2>
             </div>
           </div>
 
           <form id="filterForm" class="filters">
             <label class="field">
-              <span>Provider</span>
+              <span data-i18n="selection.provider">Provider</span>
               <select id="providerFilter" name="provider"></select>
             </label>
+
             <label class="field field-grow">
-              <span>Search</span>
-              <input id="searchInput" name="search" type="search" placeholder="Search by path, provider, cwd, or first prompt">
+              <span data-i18n="selection.search">Search</span>
+              <input
+                id="searchInput"
+                name="search"
+                type="search"
+                data-i18n-placeholder="selection.searchPlaceholder"
+                placeholder="Search by path, provider, cwd, or first prompt"
+              >
             </label>
+
             <label class="field">
-              <span>Page Size</span>
+              <span data-i18n="selection.pageSize">Page Size</span>
               <select id="limitFilter" name="limit">
                 <option value="25">25</option>
                 <option value="50" selected>50</option>
@@ -74,68 +94,89 @@
                 <option value="250">250</option>
               </select>
             </label>
-            <button class="button button-primary align-end" type="submit">Apply</button>
+
+            <div class="filter-actions">
+              <button class="button button-primary" type="submit" data-i18n="selection.apply">Apply</button>
+              <button id="resetFiltersButton" class="button button-ghost" type="button" data-i18n="selection.reset">Reset</button>
+            </div>
           </form>
 
           <div class="migration-bar">
             <label class="field field-grow">
-              <span>Target Provider</span>
-              <input id="targetProviderInput" type="text" placeholder="crs / openai / fizzlycode / custom-provider">
+              <span data-i18n="selection.targetProvider">Target Provider</span>
+              <input
+                id="targetProviderInput"
+                type="text"
+                list="providerSuggestions"
+                data-i18n-placeholder="selection.targetPlaceholder"
+                placeholder="crs / openai / fizzlycode / custom-provider"
+              >
+              <small class="field-note" data-i18n="selection.targetHint">Tip: existing provider names appear as suggestions.</small>
+              <datalist id="providerSuggestions"></datalist>
             </label>
+
             <div class="migration-actions">
-              <button id="previewButton" class="button button-secondary" type="button">Preview</button>
-              <button id="runButton" class="button button-primary" type="button">Run Migration</button>
+              <button id="previewButton" class="button button-secondary" type="button" data-i18n="selection.preview">Preview</button>
+              <button id="runButton" class="button button-primary" type="button" data-i18n="selection.run">Run Migration</button>
             </div>
           </div>
 
           <div class="selection-summary">
             <div>
-              <span class="summary-label">Selection mode</span>
+              <span class="summary-label" data-i18n="selection.selectionMode">Selection mode</span>
               <strong id="selectionMode">Current filters</strong>
             </div>
             <div>
-              <span class="summary-label">Selected files</span>
+              <span class="summary-label" data-i18n="selection.selectedFiles">Selected files</span>
               <strong id="selectedCount">0</strong>
             </div>
             <div>
-              <span class="summary-label">Matching total</span>
+              <span class="summary-label" data-i18n="selection.matchingTotal">Matching total</span>
               <strong id="matchingCount">0</strong>
             </div>
           </div>
 
+          <div id="busyNotice" class="busy-notice hidden" aria-live="polite"></div>
           <div id="previewPanel" class="preview-panel hidden"></div>
-          <div id="messagePanel" class="message-panel hidden"></div>
+          <div id="messagePanel" class="message-panel hidden" aria-live="polite"></div>
         </section>
 
         <section class="panel sessions-panel">
           <div class="panel-header">
             <div>
-              <p class="eyebrow">Sessions</p>
-              <h2>Provider-tagged history</h2>
+              <p class="eyebrow" data-i18n="sessions.eyebrow">Sessions</p>
+              <h2 data-i18n="sessions.title">Provider-tagged history</h2>
             </div>
+
             <div class="pagination">
-              <button id="prevPageButton" class="button button-ghost" type="button">Previous</button>
-              <span id="pageStatus">Page 1</span>
-              <button id="nextPageButton" class="button button-ghost" type="button">Next</button>
+              <button id="prevPageButton" class="button button-ghost" type="button" data-i18n="sessions.previous">Previous</button>
+              <span id="pageStatus">Page 1 / 1</span>
+              <button id="nextPageButton" class="button button-ghost" type="button" data-i18n="sessions.next">Next</button>
             </div>
           </div>
 
-          <div class="table-wrap">
-            <table class="session-table">
-              <thead>
-                <tr>
-                  <th class="cell-checkbox">
-                    <input id="togglePageSelection" type="checkbox" aria-label="Select all rows on page">
-                  </th>
-                  <th>Provider</th>
-                  <th>When</th>
-                  <th>Relative Path</th>
-                  <th>Workspace</th>
-                  <th>Prompt Preview</th>
-                </tr>
-              </thead>
-              <tbody id="sessionsTableBody"></tbody>
-            </table>
+          <div class="sessions-content">
+            <div class="table-wrap">
+              <table class="session-table">
+                <thead>
+                  <tr>
+                    <th class="cell-checkbox">
+                      <input
+                        id="togglePageSelection"
+                        type="checkbox"
+                        data-i18n-aria-label="sessions.selectPageAria"
+                        aria-label="Select all rows on page"
+                      >
+                    </th>
+                    <th data-i18n="sessions.table.provider">Provider</th>
+                    <th data-i18n="sessions.table.when">When</th>
+                    <th data-i18n="sessions.table.workspace">Workspace</th>
+                    <th data-i18n="sessions.table.promptPreview">Prompt Preview</th>
+                  </tr>
+                </thead>
+                <tbody id="sessionsTableBody"></tbody>
+              </table>
+            </div>
           </div>
         </section>
 
@@ -143,8 +184,8 @@
           <section class="panel backups-panel">
             <div class="panel-header">
               <div>
-                <p class="eyebrow">Backups</p>
-                <h2>Rollback points</h2>
+                <p class="eyebrow" data-i18n="backups.eyebrow">Backups</p>
+                <h2 data-i18n="backups.title">Rollback points</h2>
               </div>
             </div>
             <div id="backupsList" class="stack-list"></div>
@@ -153,9 +194,10 @@
           <section class="panel doctor-panel">
             <div class="panel-header">
               <div>
-                <p class="eyebrow">Doctor</p>
-                <h2>Storage health</h2>
+                <p class="eyebrow" data-i18n="doctor.eyebrow">Doctor</p>
+                <h2 data-i18n="doctor.title">Storage health</h2>
               </div>
+              <button id="repairIndexesButton" class="button button-secondary" type="button" data-i18n="doctor.repair">Repair indexes</button>
             </div>
             <div id="doctorSummary" class="doctor-summary"></div>
             <div id="doctorIssues" class="stack-list compact"></div>
@@ -171,6 +213,28 @@
       </article>
     </template>
 
-    <script src="/app.js"></script>
+    <div id="sessionDetailModal" class="detail-modal" aria-hidden="true" hidden>
+      <div class="detail-modal-backdrop"></div>
+      <section
+        class="detail-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="sessionDetailTitle"
+      >
+        <div class="detail-modal-header">
+          <div>
+            <p class="eyebrow" data-i18n="detail.eyebrow">Inspector</p>
+            <h3 id="sessionDetailTitle" data-i18n="detail.title">Session details</h3>
+          </div>
+          <button id="sessionDetailClose" class="button button-ghost detail-close" type="button">
+            <span aria-hidden="true">×</span>
+            <span data-i18n="common.close">Close</span>
+          </button>
+        </div>
+        <div id="sessionDetailBody" class="session-detail-body detail-modal-body"></div>
+      </section>
+    </div>
+
+    <script src="/app.js?v=20260328d"></script>
   </body>
 </html>
