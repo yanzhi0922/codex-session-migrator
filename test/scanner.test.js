@@ -14,6 +14,7 @@ const {
   scanSessions
 } = require('../src/scanner');
 const { createBackupSnapshot, getBackupRoot } = require('../src/backup-store');
+const { getSessionIndexPath } = require('../src/session-indexes');
 
 test('scanSessions returns provider stats and prompt previews', () => {
   const { sessionsDir } = createTempSessionsDir();
@@ -227,6 +228,70 @@ test('runDoctor reports missing SQLite thread rows', () => {
   assert.equal(doctor.ok, false);
   assert.equal(doctor.summary.missingThreadCount, 1);
   assert.equal(doctor.summary.providerMismatchCount, 0);
-  assert.equal(doctor.summary.missingSessionIndexCount, 0);
+  assert.equal(doctor.summary.missingSessionIndexCount, 1);
   assert.ok(doctor.issues.some((issue) => issue.type === 'missing_thread'));
+  assert.ok(doctor.issues.some((issue) => issue.type === 'missing_session_index'));
+});
+
+test('runDoctor reports missing session_index entries even when SQLite rows exist', () => {
+  const { root, sessionsDir } = createTempSessionsDir();
+  const filePath = writeSessionFile(sessionsDir, path.join('2026', '03', '28', 'missing-index.jsonl'), {
+    id: 'missing-index',
+    provider: 'codexmanager',
+    prompt: '请确认 session_index 是否完整'
+  });
+  createTempStateDb(root, [{
+    id: 'missing-index',
+    rolloutPath: filePath,
+    modelProvider: 'codexmanager'
+  }]);
+
+  const doctor = runDoctor(sessionsDir);
+
+  assert.equal(doctor.summary.missingThreadCount, 0);
+  assert.equal(doctor.summary.missingSessionIndexCount, 1);
+  assert.ok(doctor.issues.some((issue) => issue.type === 'missing_session_index'));
+});
+
+test('runDoctor reports missing session_index entries by default', () => {
+  const { root, sessionsDir } = createTempSessionsDir();
+  const filePath = writeSessionFile(sessionsDir, path.join('2026', '03', '28', 'missing-session-index.jsonl'), {
+    id: 'missing-session-index',
+    provider: 'codexmanager',
+    prompt: '请检查 session index'
+  });
+  createTempStateDb(root, [{
+    id: 'missing-session-index',
+    rolloutPath: filePath,
+    modelProvider: 'codexmanager'
+  }]);
+
+  const doctor = runDoctor(sessionsDir);
+
+  assert.equal(doctor.ok, false);
+  assert.equal(doctor.summary.missingThreadCount, 0);
+  assert.equal(doctor.summary.missingSessionIndexCount, 1);
+  assert.ok(doctor.issues.some((issue) => issue.type === 'missing_session_index'));
+  assert.equal(fs.existsSync(getSessionIndexPath(sessionsDir)), false);
+});
+
+test('runDoctor reports sessions missing a workspace path', () => {
+  const { root, sessionsDir } = createTempSessionsDir();
+  const filePath = writeSessionFile(sessionsDir, path.join('2026', '03', '28', 'missing-workspace.jsonl'), {
+    id: 'missing-workspace',
+    provider: 'openai',
+    sessionMetaOverrides: {
+      cwd: ''
+    }
+  });
+  createTempStateDb(root, [{
+    id: 'missing-workspace',
+    rolloutPath: filePath,
+    modelProvider: 'openai'
+  }]);
+
+  const doctor = runDoctor(sessionsDir);
+
+  assert.equal(doctor.summary.missingWorkspaceCount, 1);
+  assert.ok(doctor.issues.some((issue) => issue.type === 'missing_workspace'));
 });

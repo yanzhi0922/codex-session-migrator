@@ -20,18 +20,21 @@ This tool solves that with:
 - Built-in English / Simplified Chinese language switching for both the web UI and CLI.
 - Manifest-backed backups before every real migration.
 - Restore support that can roll back from any saved snapshot.
-- A `doctor` command that flags malformed session files and missing SQLite thread indexes.
-- A `repair` command and web action that rebuild missing SQLite `threads` rows from live JSONL sessions.
+- A `doctor` command that flags malformed session files, missing workspace paths, missing SQLite thread indexes, and missing `session_index` entries.
+- A `repair` command and web action that rebuild missing SQLite `threads` rows and rewrites `session_index` from live JSONL sessions.
 - A CLI for automation and scripting.
 - No runtime dependencies beyond Node.js.
 
 ## Features
 
 - Safe provider migration that rewrites `session_meta` and keeps SQLite thread indexes in sync.
+- Compatibility diagnostics that explain why sessions may still stay hidden in CodexManager.
+- Repair flows that refresh both SQLite `threads` and `session_index.jsonl`, not just one side of the index state.
 - Explicit backup snapshots stored under `__backups__/.../manifest.json`.
 - Restore flow with pre-restore safety snapshots.
-- Browser UI with provider overview, searchable session table, migration preview, backup list, and health report.
+- Browser UI with provider overview, searchable session table, concise migration preview, backup list, and health report.
 - Better UX with remembered filters, provider suggestion hints, clickable provider chips, and a session detail inspector.
+- Single-request dashboard loading for a faster, more consistent web UI refresh cycle.
 - CLI commands for `serve`, `list`, `stats`, `doctor`, `repair`, `migrate`, `restore`, and `backups`.
 - Protective guardrail against accidental full-library migration unless `--all` is explicitly used.
 - Works on Windows, macOS, and Linux.
@@ -49,6 +52,7 @@ The packaged desktop build:
 - targets `~/.codex/sessions` by default
 - includes repair, migration, backup, restore, and health-check tools
 - includes dedicated one-click launchers for the browser UI, CLI, and index repair
+- lets you double-click `codex-migrate.cmd` safely without the window flashing closed
 
 ### Developers
 
@@ -120,6 +124,8 @@ If migrated sessions do not show up in CodexManager, rebuild the SQLite thread i
 codex-migrate repair
 ```
 
+`repair` now also refreshes `session_index.jsonl` and reports sessions that are still missing a usable workspace path.
+
 ### Preview a migration
 
 ```bash
@@ -169,6 +175,7 @@ The local app exposes JSON endpoints:
 
 - `GET /api/overview`
 - `GET /api/app-config`
+- `GET /api/dashboard`
 - `GET /api/providers`
 - `GET /api/sessions`
 - `GET /api/session?path=...`

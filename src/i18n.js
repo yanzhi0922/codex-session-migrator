@@ -29,6 +29,7 @@ const dictionaries = {
     doctor: {
       invalidMeta: 'The first JSONL line is missing or cannot be parsed as session_meta.',
       missingProvider: 'The session_meta payload does not contain model_provider.',
+      missingWorkspace: 'The session cannot provide a usable workspace path, so CodexManager may hide it.',
       duplicateId: 'Duplicate session id detected. First seen at {path}.',
       missingThread: 'The session file exists, but no SQLite threads row was found.',
       providerMismatch: 'The session file provider does not match the SQLite thread provider.',
@@ -72,6 +73,7 @@ const dictionaries = {
         healthy: 'Healthy',
         invalidMetaFiles: 'Invalid meta files',
         missingProvider: 'Missing provider',
+        missingWorkspace: 'Missing workspace',
         duplicateIds: 'Duplicate ids',
         missingThreads: 'Missing SQLite threads',
         providerMismatches: 'Provider mismatches',
@@ -90,7 +92,9 @@ const dictionaries = {
         scanned: 'Scanned',
         insertedThreads: 'Inserted threads',
         updatedIndexes: 'Updated thread rows',
-        addedSessionIndex: 'Added session_index entries'
+        addedSessionIndex: 'Added session_index entries',
+        sessionIndexEntriesWritten: 'session_index entries written',
+        sessionIndexBackup: 'session_index backup'
       },
       status: {
         listening: 'Codex Session Migrator listening on {url}',
@@ -237,6 +241,8 @@ const dictionaries = {
         health: 'Health',
         invalidMeta: 'Invalid meta',
         missingProvider: 'Missing provider',
+        workspaceReady: 'Workspace-ready',
+        missingWorkspace: 'Missing workspace',
         duplicateIds: 'Duplicate ids',
         missingThreads: 'Missing SQLite threads',
         providerMismatches: 'Provider mismatches',
@@ -244,6 +250,12 @@ const dictionaries = {
         scannedFiles: 'Scanned files',
         repair: 'Repair indexes',
         range: 'Range',
+        calloutTitle: 'Repair recommended',
+        calloutTitleHealthy: 'Indexes look healthy',
+        calloutMissingSessionIndex: '{count} sessions are missing session_index entries. CodexManager may hide them until repair completes.',
+        calloutMissingThreads: '{count} sessions are missing SQLite thread rows. Repair will rebuild them from the live JSONL files.',
+        calloutProviderMismatch: '{count} sessions have provider mismatches between JSONL and SQLite. Repair will resync them.',
+        calloutHealthy: 'SQLite threads and session_index coverage look aligned for the current library.',
         healthy: 'Healthy',
         needsAttention: 'Needs attention',
         empty: 'No structural issues detected in the scanned session set.'
@@ -307,6 +319,7 @@ const dictionaries = {
     doctor: {
       invalidMeta: '第一条 JSONL 记录缺失，或无法解析为 session_meta。',
       missingProvider: 'session_meta 负载中缺少 model_provider。',
+      missingWorkspace: '该会话无法提供可用的工作区路径，因此 CodexManager 可能不会显示它。',
       duplicateId: '检测到重复的 session id，首次出现于 {path}。',
       missingThread: '会话文件存在，但 SQLite 的 threads 表中缺少对应记录。',
       providerMismatch: '会话文件中的 provider 与 SQLite threads 中的 provider 不一致。',
@@ -350,6 +363,7 @@ const dictionaries = {
         healthy: '健康状态',
         invalidMetaFiles: '无效 meta 文件',
         missingProvider: '缺少 provider',
+        missingWorkspace: '缺少工作区',
         duplicateIds: '重复 ID',
         missingThreads: '缺少 SQLite 线程索引',
         providerMismatches: 'Provider 不一致',
@@ -368,7 +382,9 @@ const dictionaries = {
         scanned: '扫描数量',
         insertedThreads: '新增线程记录',
         updatedIndexes: '更新线程记录',
-        addedSessionIndex: '新增 session_index 条目'
+        addedSessionIndex: '新增 session_index 条目',
+        sessionIndexEntriesWritten: '写入的 session_index 条目',
+        sessionIndexBackup: 'session_index 备份'
       },
       status: {
         listening: 'Codex Session Migrator 已启动：{url}',
@@ -515,6 +531,8 @@ const dictionaries = {
         health: '健康状态',
         invalidMeta: '无效 Meta',
         missingProvider: '缺少 Provider',
+        workspaceReady: '具备工作区路径',
+        missingWorkspace: '缺少工作区',
         duplicateIds: '重复 ID',
         missingThreads: '缺少 SQLite 线程索引',
         providerMismatches: 'Provider 不一致',
@@ -522,6 +540,12 @@ const dictionaries = {
         scannedFiles: '扫描文件数',
         repair: '修复索引',
         range: '时间范围',
+        calloutTitle: '建议立即修复',
+        calloutTitleHealthy: '索引状态正常',
+        calloutMissingSessionIndex: '有 {count} 个会话缺少 session_index 条目。CodexManager 可能会直接把它们隐藏，直到修复完成。',
+        calloutMissingThreads: '有 {count} 个会话缺少 SQLite threads 记录。修复会根据现有 JSONL 重建这些记录。',
+        calloutProviderMismatch: '有 {count} 个会话的 JSONL provider 与 SQLite provider 不一致。修复会重新同步。',
+        calloutHealthy: '当前会话库的 SQLite threads 和 session_index 覆盖情况看起来是一致的。',
         healthy: '健康',
         needsAttention: '需要关注',
         empty: '扫描到的会话集合中没有发现结构性问题。'

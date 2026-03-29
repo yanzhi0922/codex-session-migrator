@@ -24,7 +24,7 @@ test('repairSessionIndexes inserts missing SQLite rows and session_index entries
   });
   const dbPath = createTempStateDb(root, []);
 
-  const result = repairSessionIndexes(sessionsDir, { repairSessionIndex: true });
+  const result = repairSessionIndexes(sessionsDir);
 
   assert.equal(result.ok, true);
   assert.equal(result.scanned, 1);
@@ -113,4 +113,53 @@ test('repairSessionIndexes derives rich thread metadata from complex session fil
   if (process.platform === 'win32') {
     assert.match(row.cwd, /^\\\\\?\\/);
   }
+});
+
+test('repairSessionIndexes can rewrite a canonical session_index file', () => {
+  const { root, sessionsDir } = createTempSessionsDir();
+  const firstPath = writeSessionFile(sessionsDir, path.join('2026', '03', '28', 'first.jsonl'), {
+    id: 'repair-first',
+    provider: 'openai',
+    prompt: 'First canonical title'
+  });
+  const secondPath = writeSessionFile(sessionsDir, path.join('2026', '03', '28', 'second.jsonl'), {
+    id: 'repair-second',
+    provider: 'codexmanager',
+    prompt: 'Second canonical title'
+  });
+  createTempStateDb(root, [{
+    id: 'repair-first',
+    rolloutPath: firstPath,
+    modelProvider: 'openai'
+  }, {
+    id: 'repair-second',
+    rolloutPath: secondPath,
+    modelProvider: 'codexmanager'
+  }]);
+
+  const sessionIndexPath = getSessionIndexPath(sessionsDir);
+  fs.writeFileSync(sessionIndexPath, [
+    JSON.stringify({ id: 'repair-first', thread_name: 'Outdated title', updated_at: '2025-01-01T00:00:00.000Z' }),
+    JSON.stringify({ id: 'repair-first', thread_name: 'Duplicate stale title', updated_at: '2025-01-02T00:00:00.000Z' })
+  ].join('\n').concat('\n'), 'utf8');
+
+  const result = repairSessionIndexes(sessionsDir, {
+    repairSessionIndex: true,
+    rewriteSessionIndex: true
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.rewroteSessionIndex, true);
+  assert.equal(result.addedSessionIndexEntries, 1);
+  assert.equal(result.sessionIndexEntriesWritten, 2);
+  assert.ok(result.sessionIndexBackupPath);
+
+  const entries = fs.readFileSync(sessionIndexPath, 'utf8')
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+
+  assert.deepEqual(entries.map((entry) => entry.id).sort(), ['repair-first', 'repair-second']);
+  assert.equal(entries.find((entry) => entry.id === 'repair-first').thread_name, 'First canonical title');
+  assert.equal(entries.find((entry) => entry.id === 'repair-second').thread_name, 'Second canonical title');
 });

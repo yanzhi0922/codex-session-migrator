@@ -14,7 +14,11 @@ const MAX_PREVIEW_BYTES = 1024 * 1024;
 const MAX_RECENT_PROMPTS = 3;
 const MAX_DETAIL_PROMPTS = 5;
 const MAX_RECENT_PROMPT_BYTES = 2 * 1024 * 1024;
+const MAX_TAIL_INSIGHT_BYTES = 2 * 1024 * 1024;
+const MAX_SESSION_CACHE_ENTRIES = 5000;
 const PROVIDER_PATTERN = /^[a-zA-Z0-9._-]{1,128}$/;
+const SESSION_META_CACHE = new Map();
+const SESSION_TAIL_CACHE = new Map();
 const STRIP_BLOCK_TAGS = [
   'environment_context',
   'turn_aborted',
@@ -48,6 +52,47 @@ function statSafe(filePath) {
   } catch {
     return null;
   }
+}
+
+function getFileSignature(filePath, stat = null) {
+  const fileStat = stat || statSafe(filePath);
+  if (!fileStat) {
+    return null;
+  }
+
+  return `${path.resolve(filePath)}::${fileStat.size}:${fileStat.mtimeMs}`;
+}
+
+function readCacheValue(cache, filePath, stat = null) {
+  const signature = getFileSignature(filePath, stat);
+  if (!signature) {
+    return undefined;
+  }
+
+  const entry = cache.get(path.resolve(filePath));
+  if (!entry || entry.signature !== signature) {
+    return undefined;
+  }
+
+  return entry.value;
+}
+
+function writeCacheValue(cache, filePath, value, stat = null) {
+  const signature = getFileSignature(filePath, stat);
+  if (!signature) {
+    return value;
+  }
+
+  if (cache.size >= MAX_SESSION_CACHE_ENTRIES) {
+    cache.clear();
+  }
+
+  cache.set(path.resolve(filePath), {
+    signature,
+    value
+  });
+
+  return value;
 }
 
 function readChunk(filePath, maxBytes) {
@@ -197,34 +242,48 @@ function summarizePrompt(text, maxLength = 220) {
 }
 
 function parseFirstLine(filePath) {
+  const stat = statSafe(filePath);
+  const cached = readCacheValue(SESSION_META_CACHE, filePath, stat);
+  if (cached !== undefined) {
+    return cached;
+  }
+
   try {
     const chunk = readChunk(filePath, MAX_FIRST_LINE_BYTES);
     const [firstLine] = chunk.split(/\r?\n/, 1);
     if (!firstLine || !firstLine.trim()) {
-      return null;
+      return writeCacheValue(SESSION_META_CACHE, filePath, null, stat);
     }
 
     const record = JSON.parse(firstLine);
     if (record.type !== 'session_meta' || !record.payload || typeof record.payload !== 'object') {
-      return null;
+      return writeCacheValue(SESSION_META_CACHE, filePath, null, stat);
     }
 
-    return record.payload;
+    return writeCacheValue(SESSION_META_CACHE, filePath, record.payload, stat);
   } catch {
-    return null;
+    return writeCacheValue(SESSION_META_CACHE, filePath, null, stat);
   }
 }
 
-function extractRecentUserPrompts(filePath, options = {}) {
+function extractTailInsights(filePath, options = {}) {
+  const stat = statSafe(filePath);
+  const cached = readCacheValue(SESSION_TAIL_CACHE, filePath, stat);
+  if (cached !== undefined) {
+    return cached;
+  }
+
   try {
-    const limit = Math.max(1, Number(options.limit) || MAX_RECENT_PROMPTS);
     const { chunk, truncatedStart } = readTailChunk(
       filePath,
-      options.maxBytes || MAX_RECENT_PROMPT_BYTES
+      options.maxBytes || MAX_TAIL_INSIGHT_BYTES
     );
     const lines = chunk.split(/\r?\n/);
     const prompts = [];
     const seenPrompts = new Set();
+    let latestCwd = '';
+    let latestModel = '';
+    let latestTimestamp = '';
 
     if (truncatedStart && lines.length) {
       lines.shift();
@@ -241,6 +300,32 @@ function extractRecentUserPrompts(filePath, options = {}) {
         continue;
       }
 
+      if (
+        !latestCwd &&
+        record.type === 'turn_context' &&
+        record.payload &&
+        typeof record.payload === 'object' &&
+        typeof record.payload.cwd === 'string' &&
+        record.payload.cwd.trim()
+      ) {
+        latestCwd = record.payload.cwd;
+      }
+
+      if (
+        !latestModel &&
+        record.type === 'turn_context' &&
+        record.payload &&
+        typeof record.payload === 'object' &&
+        typeof record.payload.model === 'string' &&
+        record.payload.model.trim()
+      ) {
+        latestModel = record.payload.model;
+      }
+
+      if (!latestTimestamp && typeof record.timestamp === 'string' && record.timestamp.trim()) {
+        latestTimestamp = record.timestamp;
+      }
+
       const rawPrompt = extractUserInputText(record);
       const cleanedPrompt = sanitizeUserPrompt(rawPrompt);
 
@@ -249,27 +334,55 @@ function extractRecentUserPrompts(filePath, options = {}) {
         prompts.push(cleanedPrompt);
       }
 
-      if (prompts.length >= limit) {
+      if (
+        prompts.length >= MAX_DETAIL_PROMPTS &&
+        latestCwd &&
+        latestModel &&
+        latestTimestamp
+      ) {
         break;
       }
     }
 
-    return prompts;
+    return writeCacheValue(SESSION_TAIL_CACHE, filePath, {
+      recentPrompts: prompts,
+      latestCwd,
+      latestModel,
+      latestTimestamp
+    }, stat);
   } catch {
-    return [];
+    return {
+      recentPrompts: [],
+      latestCwd: '',
+      latestModel: '',
+      latestTimestamp: ''
+    };
   }
+}
+
+function extractRecentUserPrompts(filePath, options = {}) {
+  const limit = Math.max(1, Number(options.limit) || MAX_RECENT_PROMPTS);
+  return extractTailInsights(filePath, options).recentPrompts.slice(0, limit);
 }
 
 function normalizeSessionRecord(filePath, sessionsDir, meta, options = {}) {
   const stat = statSafe(filePath);
   const relativePath = path.relative(sessionsDir, filePath);
+  const includePreview = Boolean(options.includePreview);
+  const includeContext = Boolean(options.includeContext);
+  const tailInsights = (includePreview || includeContext || !meta.cwd)
+    ? extractTailInsights(filePath, {
+        maxBytes: options.maxBytes || MAX_TAIL_INSIGHT_BYTES
+      })
+    : null;
   const provider = meta.model_provider || 'unknown';
-  const timestamp = meta.timestamp || '';
-  const recentPrompts = options.includePreview
-    ? extractRecentUserPrompts(filePath, { limit: options.previewPromptLimit || MAX_RECENT_PROMPTS })
+  const timestamp = tailInsights?.latestTimestamp || meta.timestamp || '';
+  const recentPrompts = includePreview
+    ? (tailInsights?.recentPrompts || []).slice(0, options.previewPromptLimit || MAX_RECENT_PROMPTS)
     : [];
   const preview = recentPrompts.length ? summarizePrompt(recentPrompts[0]) : null;
   const locale = options.locale || 'en';
+  const cwd = tailInsights?.latestCwd || meta.cwd || '';
 
   return {
     id: meta.id || relativePath,
@@ -278,7 +391,7 @@ function normalizeSessionRecord(filePath, sessionsDir, meta, options = {}) {
     provider,
     timestamp,
     timestampDisplay: formatDisplayTimestamp(timestamp, locale),
-    cwd: meta.cwd || '',
+    cwd,
     originator: meta.originator || '',
     cliVersion: meta.cli_version || '',
     preview,
@@ -286,6 +399,27 @@ function normalizeSessionRecord(filePath, sessionsDir, meta, options = {}) {
     size: stat ? stat.size : 0,
     sizeDisplay: formatBytesDisplay(stat ? stat.size : 0, locale)
   };
+}
+
+function enrichSessionRecordWithPreview(item, options = {}) {
+  if (!item || !item.filePath) {
+    return item;
+  }
+
+  const previewPromptLimit = Math.max(1, Number(options.previewPromptLimit) || MAX_RECENT_PROMPTS);
+  const locale = options.locale || 'en';
+  const tailInsights = extractTailInsights(item.filePath, {
+    maxBytes: options.maxBytes || MAX_TAIL_INSIGHT_BYTES
+  });
+  const recentPrompts = (tailInsights.recentPrompts || []).slice(0, previewPromptLimit);
+
+  item.timestamp = tailInsights.latestTimestamp || item.timestamp || '';
+  item.timestampDisplay = formatDisplayTimestamp(item.timestamp, locale);
+  item.cwd = tailInsights.latestCwd || item.cwd || '';
+  item.preview = recentPrompts.length ? summarizePrompt(recentPrompts[0]) : null;
+  item.recentPrompts = recentPrompts;
+
+  return item;
 }
 
 function walkSessionFiles(sessionsDir, onFile) {
@@ -354,16 +488,23 @@ function filterSessions(items, { provider, search } = {}) {
       return true;
     }
 
-    const haystacks = [
+    const baseHaystacks = [
       item.id,
       item.provider,
       item.relativePath,
-      item.cwd,
-      item.preview || '',
-      ...(item.recentPrompts || [])
+      item.cwd
     ];
 
-    return haystacks.some((value) => String(value || '').toLowerCase().includes(query));
+    if (baseHaystacks.some((value) => String(value || '').toLowerCase().includes(query))) {
+      return true;
+    }
+
+    const tailInsights = extractTailInsights(item.filePath, {
+      maxBytes: MAX_TAIL_INSIGHT_BYTES
+    });
+    const promptHaystacks = (tailInsights.recentPrompts || []).slice(0, MAX_DETAIL_PROMPTS);
+
+    return promptHaystacks.some((value) => String(value || '').toLowerCase().includes(query));
   });
 }
 
@@ -398,9 +539,15 @@ function scanSessions(sessionsDir, options = {}) {
   const dir = getSessionsDir(sessionsDir);
   const { locale } = resolveTranslator(options);
   const includePreview = Boolean(options.search || options.includePreview);
-  const allItems = getAllSessions(dir, { includePreview, locale });
+  const allItems = getAllSessions(dir, { locale });
   const filtered = filterSessions(allItems, options);
   const paginated = paginate(filtered, options);
+  const items = includePreview
+    ? paginated.items.map((item) => enrichSessionRecordWithPreview(item, {
+        previewPromptLimit: options.previewPromptLimit || MAX_RECENT_PROMPTS,
+        locale
+      }))
+    : paginated.items;
 
   return {
     sessionsDir: dir,
@@ -409,7 +556,8 @@ function scanSessions(sessionsDir, options = {}) {
       all: allItems.length,
       filtered: filtered.length
     },
-    ...paginated
+    ...paginated,
+    items
   };
 }
 
@@ -448,11 +596,17 @@ function getSessionDetail(filePath, sessionsDir, options = {}) {
     return null;
   }
 
-  return normalizeSessionRecord(validatedPath, getSessionsDir(sessionsDir), meta, {
-    includePreview: true,
-    previewPromptLimit: options.previewPromptLimit || MAX_DETAIL_PROMPTS,
-    locale: resolveTranslator(options).locale
-  });
+  const locale = resolveTranslator(options).locale;
+
+  return enrichSessionRecordWithPreview(
+    normalizeSessionRecord(validatedPath, getSessionsDir(sessionsDir), meta, {
+      locale
+    }),
+    {
+      previewPromptLimit: options.previewPromptLimit || MAX_DETAIL_PROMPTS,
+      locale
+    }
+  );
 }
 
 function listBackups(sessionsDir, options = {}) {
@@ -507,6 +661,7 @@ function runDoctor(sessionsDir, options = {}) {
   let totalFiles = 0;
   let invalidMetaCount = 0;
   let missingProviderCount = 0;
+  let missingWorkspaceCount = 0;
   let oldestTimestamp = null;
   let latestTimestamp = null;
 
@@ -536,6 +691,17 @@ function runDoctor(sessionsDir, options = {}) {
       });
     }
 
+    const workspace = String(meta.cwd || '').trim() || extractTailInsights(filePath).latestCwd || '';
+    if (!String(workspace).trim()) {
+      missingWorkspaceCount += 1;
+      issues.push({
+        severity: 'warning',
+        type: 'missing_workspace',
+        relativePath,
+        message: t('doctor.missingWorkspace')
+      });
+    }
+
     if (meta.id) {
       const existing = ids.get(meta.id);
       if (existing) {
@@ -560,7 +726,10 @@ function runDoctor(sessionsDir, options = {}) {
     }
   });
 
-  const indexHealth = getIndexHealth(dir, { t });
+  const indexHealth = getIndexHealth(dir, {
+    includeSessionIndex: true,
+    t
+  });
   issues.push(...indexHealth.issues);
 
   return {
@@ -575,6 +744,8 @@ function runDoctor(sessionsDir, options = {}) {
       totalFiles,
       invalidMetaCount,
       missingProviderCount,
+      missingWorkspaceCount,
+      workspaceReadyCount: Math.max(0, totalFiles - invalidMetaCount - missingWorkspaceCount),
       duplicateIdCount: issues.filter((issue) => issue.type === 'duplicate_id').length,
       missingThreadCount: indexHealth.missingThreadCount,
       providerMismatchCount: indexHealth.providerMismatchCount,
@@ -592,8 +763,10 @@ function runDoctor(sessionsDir, options = {}) {
 
 module.exports = {
   DEFAULT_SESSIONS_DIR,
+  extractTailInsights,
   extractRecentUserPrompts,
   extractUserInputText,
+  filterSessions,
   getAllSessions,
   getOverview,
   getProviders,

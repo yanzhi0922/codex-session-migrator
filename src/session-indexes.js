@@ -459,6 +459,21 @@ function loadSessionIndexState(sessionsDir) {
   };
 }
 
+function createSessionIndexEntry(threadRecord) {
+  return {
+    id: threadRecord.id,
+    thread_name: threadRecord.title,
+    updated_at: toIsoTimestamp(threadRecord.updatedAt)
+  };
+}
+
+function sortSessionIndexEntries(entries) {
+  return [...entries].sort((left, right) => {
+    const byUpdatedAt = String(right.updated_at || '').localeCompare(String(left.updated_at || ''));
+    return byUpdatedAt || String(left.id || '').localeCompare(String(right.id || ''));
+  });
+}
+
 function appendSessionIndexEntries(sessionIndexPath, entries) {
   if (!entries.length) {
     return 0;
@@ -471,6 +486,45 @@ function appendSessionIndexEntries(sessionIndexPath, entries) {
   const payload = entries.map((entry) => JSON.stringify(entry)).join('\n');
   fs.appendFileSync(sessionIndexPath, `${prefix}${payload}\n`, 'utf8');
   return entries.length;
+}
+
+function writeSessionIndexEntries(sessionIndexPath, entries, options = {}) {
+  const sortedEntries = sortSessionIndexEntries(entries);
+  const nextContent = sortedEntries.length
+    ? `${sortedEntries.map((entry) => JSON.stringify(entry)).join('\n')}\n`
+    : '';
+  const currentContent = fs.existsSync(sessionIndexPath)
+    ? fs.readFileSync(sessionIndexPath, 'utf8')
+    : '';
+
+  if (currentContent === nextContent) {
+    return {
+      writtenEntries: sortedEntries.length,
+      changed: false,
+      backupPath: null
+    };
+  }
+
+  fs.mkdirSync(path.dirname(sessionIndexPath), { recursive: true });
+
+  let backupPath = null;
+  if (currentContent) {
+    const suffix = new Date().toISOString()
+      .replace(/[-:]/g, '')
+      .replace(/\..+$/, '')
+      .replace('T', '-');
+    const label = String(options.backupLabel || 'repair').replace(/[^a-z0-9_-]+/gi, '-');
+    backupPath = `${sessionIndexPath}.pre-${label}-${suffix}.bak`;
+    fs.writeFileSync(backupPath, currentContent, 'utf8');
+  }
+
+  fs.writeFileSync(sessionIndexPath, nextContent, 'utf8');
+
+  return {
+    writtenEntries: sortedEntries.length,
+    changed: true,
+    backupPath
+  };
 }
 
 function getThreadTableColumnsFromNodeSqlite(db) {
@@ -845,7 +899,7 @@ function loadAllThreadRowsFromStateDb(dbPath) {
 function getIndexHealth(sessionsDir, options = {}) {
   const sessionsRoot = path.resolve(sessionsDir);
   const dbPaths = listStateDatabasePaths(sessionsRoot);
-  const includeSessionIndex = Boolean(options.includeSessionIndex);
+  const includeSessionIndex = options.includeSessionIndex !== false;
   const sessionIndexState = includeSessionIndex ? loadSessionIndexState(sessionsRoot) : null;
   const threadRowsBySessionId = new Map();
   const threadRowsByRolloutPath = new Map();
@@ -928,16 +982,23 @@ function getIndexHealth(sessionsDir, options = {}) {
 
 function repairSessionIndexes(sessionsDir, options = {}) {
   const sessionsRoot = path.resolve(sessionsDir);
-  const repairSessionIndex = Boolean(options.repairSessionIndex);
+  const repairSessionIndex = options.repairSessionIndex !== false;
+  const rewriteSessionIndex = repairSessionIndex && Boolean(options.rewriteSessionIndex);
   const targetFiles = buildSessionTargets(sessionsRoot, options);
   const dbPaths = listStateDatabasePaths(sessionsRoot);
   const sessionIndexState = repairSessionIndex ? loadSessionIndexState(sessionsRoot) : null;
+  const existingSessionIndexById = sessionIndexState ? new Map(sessionIndexState.latestById) : null;
   const pendingSessionIndexEntries = [];
   const results = [];
+  const allTargetsSelected = !Array.isArray(options.filePaths);
 
   let insertedThreads = 0;
   let updatedThreads = 0;
   let addedSessionIndexEntries = 0;
+
+  if (sessionIndexState && rewriteSessionIndex && allTargetsSelected) {
+    sessionIndexState.latestById.clear();
+  }
 
   for (const filePath of targetFiles) {
     const relativePath = path.relative(sessionsRoot, filePath);
@@ -949,7 +1010,7 @@ function repairSessionIndexes(sessionsDir, options = {}) {
       }
 
       const existingSessionIndexEntry = repairSessionIndex
-        ? (sessionIndexState.latestById.get(meta.id) || null)
+        ? (existingSessionIndexById.get(meta.id) || null)
         : null;
       const threadRecord = deriveThreadRecord(filePath, existingSessionIndexEntry);
       let fileInserted = 0;
@@ -961,15 +1022,19 @@ function repairSessionIndexes(sessionsDir, options = {}) {
         fileUpdated += result.updated;
       }
 
-      if (repairSessionIndex && !existingSessionIndexEntry) {
-        const sessionIndexEntry = {
-          id: threadRecord.id,
-          thread_name: threadRecord.title,
-          updated_at: toIsoTimestamp(threadRecord.updatedAt)
-        };
-        pendingSessionIndexEntries.push(sessionIndexEntry);
-        sessionIndexState.latestById.set(threadRecord.id, sessionIndexEntry);
-        addedSessionIndexEntries += 1;
+      if (repairSessionIndex) {
+        const sessionIndexEntry = createSessionIndexEntry(threadRecord);
+
+        if (!existingSessionIndexEntry) {
+          addedSessionIndexEntries += 1;
+        }
+
+        if (rewriteSessionIndex) {
+          sessionIndexState.latestById.set(threadRecord.id, sessionIndexEntry);
+        } else if (!existingSessionIndexEntry) {
+          pendingSessionIndexEntries.push(sessionIndexEntry);
+          sessionIndexState.latestById.set(threadRecord.id, sessionIndexEntry);
+        }
       }
 
       insertedThreads += fileInserted;
@@ -993,12 +1058,29 @@ function repairSessionIndexes(sessionsDir, options = {}) {
     }
   }
 
-  const appendedCount = repairSessionIndex
-    ? appendSessionIndexEntries(
+  let sessionIndexWriteResult = {
+    writtenEntries: repairSessionIndex && sessionIndexState ? sessionIndexState.latestById.size : 0,
+    changed: false,
+    backupPath: null
+  };
+  let appendedCount = 0;
+
+  if (repairSessionIndex && sessionIndexState) {
+    if (rewriteSessionIndex) {
+      sessionIndexWriteResult = writeSessionIndexEntries(
+        sessionIndexState.sessionIndexPath,
+        Array.from(sessionIndexState.latestById.values()),
+        {
+          backupLabel: allTargetsSelected ? 'full-repair' : 'repair'
+        }
+      );
+    } else {
+      appendedCount = appendSessionIndexEntries(
         sessionIndexState.sessionIndexPath,
         pendingSessionIndexEntries
-      )
-    : 0;
+      );
+    }
+  }
 
   return {
     ok: results.every((item) => item.ok),
@@ -1008,7 +1090,12 @@ function repairSessionIndexes(sessionsDir, options = {}) {
     sessionIndexPath: repairSessionIndex ? sessionIndexState.sessionIndexPath : getSessionIndexPath(sessionsRoot),
     insertedThreads,
     updatedThreads,
-    addedSessionIndexEntries: appendedCount,
+    addedSessionIndexEntries: rewriteSessionIndex ? addedSessionIndexEntries : appendedCount,
+    rewroteSessionIndex: rewriteSessionIndex,
+    sessionIndexEntriesWritten: rewriteSessionIndex
+      ? sessionIndexWriteResult.writtenEntries
+      : (sessionIndexState ? sessionIndexState.latestById.size : 0) + appendedCount,
+    sessionIndexBackupPath: sessionIndexWriteResult.backupPath,
     failed: results.filter((item) => !item.ok).length,
     results
   };

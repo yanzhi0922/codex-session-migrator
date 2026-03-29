@@ -33,6 +33,14 @@ test('HTTP API serves overview and sessions', async () => {
     assert.equal(overviewPayload.ok, true);
     assert.equal(overviewPayload.overview.totals.sessions, 1);
 
+    const dashboardResponse = await fetch(`${baseUrl}/api/dashboard?includePreview=1`);
+    const dashboardPayload = await dashboardResponse.json();
+    assert.equal(dashboardPayload.ok, true);
+    assert.equal(dashboardPayload.overview.totals.sessions, 1);
+    assert.equal(dashboardPayload.sessions.total, 1);
+    assert.equal(Array.isArray(dashboardPayload.backups), true);
+    assert.equal(dashboardPayload.doctor.summary.totalFiles, 1);
+
     const htmlResponse = await fetch(`${baseUrl}/`);
     const html = await htmlResponse.text();
     assert.match(html, /Codex Session Migrator/);
@@ -74,6 +82,8 @@ test('HTTP API can repair missing indexes', async () => {
     const payload = await response.json();
     assert.equal(payload.ok, true);
     assert.equal(payload.repair.insertedThreads, 1);
+    assert.equal(payload.repair.rewroteSessionIndex, true);
+    assert.equal(payload.repair.sessionIndexEntriesWritten, 1);
   } finally {
     await new Promise((resolve, reject) => {
       app.server.close((error) => {

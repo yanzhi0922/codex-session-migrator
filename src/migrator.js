@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const {
+  filterSessions,
   getAllSessions,
   getSessionsDir,
   parseFirstLine,
@@ -48,7 +49,7 @@ function resolveSelectedSessions(sessionsDir, selection, options = {}) {
   const normalizedSelection = normalizeSelection(selection);
   const { locale, t } = resolveTranslator(options);
   const allItems = getAllSessions(dir, {
-    includePreview: Boolean(normalizedSelection.search),
+    includePreview: Boolean(options.includePreview),
     locale
   });
   const byPath = mapSessionsByPath(allItems);
@@ -73,17 +74,10 @@ function resolveSelectedSessions(sessionsDir, selection, options = {}) {
       throw new Error(t('errors.fullLibraryRefused'));
     }
 
-    if (normalizedSelection.provider && normalizedSelection.provider !== 'all') {
-      selected = selected.filter((item) => item.provider === normalizedSelection.provider);
-    }
-
-    if (normalizedSelection.search) {
-      const query = String(normalizedSelection.search).trim().toLowerCase();
-      selected = selected.filter((item) => {
-        return [item.id, item.provider, item.relativePath, item.cwd, item.preview || '']
-          .some((value) => String(value || '').toLowerCase().includes(query));
-      });
-    }
+    selected = filterSessions(selected, {
+      provider: normalizedSelection.provider,
+      search: normalizedSelection.search
+    });
   }
 
   const limit = normalizedSelection.limit ? Math.max(1, Number(normalizedSelection.limit)) : 0;
@@ -135,6 +129,10 @@ function buildPreview(items, targetProvider) {
     id: item.id,
     filePath: item.filePath,
     relativePath: item.relativePath,
+    timestamp: item.timestamp,
+    timestampDisplay: item.timestampDisplay,
+    cwd: item.cwd || '',
+    preview: item.preview || null,
     from: item.provider,
     to: targetProvider,
     skipped: item.provider === targetProvider
@@ -144,7 +142,11 @@ function buildPreview(items, targetProvider) {
 function previewMigration(sessionsDir, selection, targetProvider, options = {}) {
   const { locale, t } = resolveTranslator(options);
   const nextProvider = validateProviderName(targetProvider, { t, locale });
-  const items = resolveSelectedSessions(sessionsDir, selection, { t, locale });
+  const items = resolveSelectedSessions(sessionsDir, selection, {
+    includePreview: true,
+    t,
+    locale
+  });
   const preview = buildPreview(items, nextProvider);
 
   return {
@@ -200,15 +202,23 @@ function migrateSessions(sessionsDir, selection, targetProvider, options = {}) {
     });
   }
 
-  const results = [];
+  const rewrittenItems = [];
+  const resultsByPath = new Map();
+
+  function setResult(item, overrides) {
+    resultsByPath.set(path.resolve(item.filePath), {
+      id: item.id,
+      relativePath: item.relativePath,
+      filePath: item.filePath,
+      from: item.from,
+      to: item.to,
+      ...overrides
+    });
+  }
 
   for (const item of preview) {
     if (item.skipped) {
-      results.push({
-        relativePath: item.relativePath,
-        filePath: item.filePath,
-        from: item.from,
-        to: item.to,
+      setResult(item, {
         ok: true,
         skipped: true
       });
@@ -217,41 +227,96 @@ function migrateSessions(sessionsDir, selection, targetProvider, options = {}) {
 
     try {
       const previousProvider = rewriteProviderInFile(item.filePath, nextProvider, { t, locale });
-      try {
-        repairSessionIndexes(dir, {
-          filePaths: [item.filePath]
-        });
-      } catch (error) {
-        rewriteProviderInFile(item.filePath, previousProvider, { t, locale });
-        try {
-          repairSessionIndexes(dir, {
-            filePaths: [item.filePath]
-          });
-        } catch {
-        }
-        throw error;
-      }
-
-      results.push({
-        relativePath: item.relativePath,
-        filePath: item.filePath,
-        from: previousProvider,
-        to: nextProvider,
-        ok: true,
-        skipped: false
+      rewrittenItems.push({
+        item,
+        previousProvider
       });
     } catch (error) {
-      results.push({
-        relativePath: item.relativePath,
-        filePath: item.filePath,
-        from: item.from,
-        to: item.to,
+      setResult(item, {
         ok: false,
         skipped: false,
         error: error.message
       });
     }
   }
+
+  if (rewrittenItems.length) {
+    const rewrittenPaths = rewrittenItems.map(({ item }) => item.filePath);
+
+    try {
+      const repair = repairSessionIndexes(dir, {
+        filePaths: rewrittenPaths,
+        repairSessionIndex: true
+      });
+      const repairFailures = new Map(
+        repair.results
+          .filter((entry) => !entry.ok)
+          .map((entry) => [path.resolve(entry.filePath), entry.error || 'Index repair failed.'])
+      );
+
+      if (repairFailures.size) {
+        for (const { item, previousProvider } of rewrittenItems) {
+          if (!repairFailures.has(path.resolve(item.filePath))) {
+            continue;
+          }
+          rewriteProviderInFile(item.filePath, previousProvider, { t, locale });
+        }
+
+        try {
+          repairSessionIndexes(dir, {
+            filePaths: rewrittenPaths,
+            repairSessionIndex: true
+          });
+        } catch {
+        }
+      }
+
+      for (const { item, previousProvider } of rewrittenItems) {
+        const repairError = repairFailures.get(path.resolve(item.filePath));
+        setResult(item, {
+          from: previousProvider,
+          ok: !repairError,
+          skipped: false,
+          ...(repairError ? { error: repairError } : {})
+        });
+      }
+    } catch (error) {
+      for (const { item, previousProvider } of rewrittenItems) {
+        try {
+          rewriteProviderInFile(item.filePath, previousProvider, { t, locale });
+        } catch {
+        }
+
+        setResult(item, {
+          from: previousProvider,
+          ok: false,
+          skipped: false,
+          error: error.message
+        });
+      }
+
+      try {
+        repairSessionIndexes(dir, {
+          filePaths: rewrittenPaths,
+          repairSessionIndex: true
+        });
+      } catch {
+      }
+    }
+  }
+
+  const results = preview.map((item) => {
+    return resultsByPath.get(path.resolve(item.filePath)) || {
+      id: item.id,
+      relativePath: item.relativePath,
+      filePath: item.filePath,
+      from: item.from,
+      to: item.to,
+      ok: false,
+      skipped: false,
+      error: 'Migration result could not be resolved.'
+    };
+  });
 
   return {
     ok: results.every((item) => item.ok),
@@ -305,6 +370,7 @@ function restoreFromBackup(backupDirOrId, sessionsDir, options = {}) {
     : null;
 
   const results = [];
+  const restoredPaths = [];
 
   for (const entry of manifest.entries) {
     const sourcePath = path.join(backupDir, 'files', entry.backupRelativePath || entry.relativePath);
@@ -317,12 +383,7 @@ function restoreFromBackup(backupDirOrId, sessionsDir, options = {}) {
 
       fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
       fs.copyFileSync(sourcePath, destinationPath);
-      const restoredMeta = parseFirstLine(destinationPath);
-      if (restoredMeta && restoredMeta.model_provider) {
-        repairSessionIndexes(dir, {
-          filePaths: [destinationPath]
-        });
-      }
+      restoredPaths.push(destinationPath);
 
       results.push({
         relativePath: entry.relativePath,
@@ -334,6 +395,41 @@ function restoreFromBackup(backupDirOrId, sessionsDir, options = {}) {
         ok: false,
         error: error.message
       });
+    }
+  }
+
+  if (restoredPaths.length) {
+    try {
+      const repair = repairSessionIndexes(dir, {
+        filePaths: restoredPaths,
+        repairSessionIndex: true
+      });
+      const repairFailures = new Map(
+        repair.results
+          .filter((entry) => !entry.ok)
+          .map((entry) => [path.resolve(entry.filePath), entry.error || 'Index repair failed.'])
+      );
+
+      if (repairFailures.size) {
+        for (const item of results) {
+          const destinationPath = path.join(dir, item.relativePath);
+          const repairError = repairFailures.get(path.resolve(destinationPath));
+          if (!repairError) {
+            continue;
+          }
+
+          item.ok = false;
+          item.error = repairError;
+        }
+      }
+    } catch (error) {
+      for (const item of results) {
+        if (!item.ok) {
+          continue;
+        }
+        item.ok = false;
+        item.error = error.message;
+      }
     }
   }
 

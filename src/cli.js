@@ -231,6 +231,7 @@ function handleDoctor(flags) {
   console.log(`${t('cli.labels.healthy')}: ${doctor.ok ? t('web.doctor.healthy') : t('web.doctor.needsAttention')}`);
   console.log(`${t('cli.labels.invalidMetaFiles')}: ${doctor.summary.invalidMetaCount}`);
   console.log(`${t('cli.labels.missingProvider')}: ${doctor.summary.missingProviderCount}`);
+  console.log(`${t('cli.labels.missingWorkspace')}: ${doctor.summary.missingWorkspaceCount}`);
   console.log(`${t('cli.labels.duplicateIds')}: ${doctor.summary.duplicateIdCount}`);
   console.log(`${t('cli.labels.missingThreads')}: ${doctor.summary.missingThreadCount}`);
   console.log(`${t('cli.labels.providerMismatches')}: ${doctor.summary.providerMismatchCount}`);
@@ -370,7 +371,10 @@ async function handleRestore(flags) {
 
 function handleRepair(flags) {
   const { t } = getCliI18n(flags);
-  const result = repairSessionIndexes(getSessionsDir(flags['sessions-dir']));
+  const result = repairSessionIndexes(getSessionsDir(flags['sessions-dir']), {
+    repairSessionIndex: true,
+    rewriteSessionIndex: true
+  });
 
   if (flags.json) {
     console.log(JSON.stringify(result, null, 2));
@@ -382,7 +386,11 @@ function handleRepair(flags) {
   console.log(`${t('cli.labels.insertedThreads')}: ${result.insertedThreads}`);
   console.log(`${t('cli.labels.updatedIndexes')}: ${result.updatedThreads}`);
   console.log(`${t('cli.labels.addedSessionIndex')}: ${result.addedSessionIndexEntries}`);
+  console.log(`${t('cli.labels.sessionIndexEntriesWritten')}: ${result.sessionIndexEntriesWritten}`);
   console.log(`${t('cli.labels.failed')}: ${result.failed}`);
+  if (result.sessionIndexBackupPath) {
+    console.log(`${t('cli.labels.sessionIndexBackup')}: ${result.sessionIndexBackupPath}`);
+  }
   console.log('');
 
   for (const item of result.results.slice(0, 100)) {

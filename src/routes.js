@@ -126,6 +126,21 @@ function createRouter(sessionsDir) {
         return true;
       }
 
+      if (req.method === 'GET' && url.pathname === '/api/dashboard') {
+        const query = parseListQuery(url);
+        sendJson(res, 200, {
+          ok: true,
+          overview: getOverview(resolvedSessionsDir, { locale }),
+          sessions: scanSessions(resolvedSessionsDir, {
+            ...query,
+            locale
+          }),
+          backups: listBackups(resolvedSessionsDir, { locale }),
+          doctor: runDoctor(resolvedSessionsDir, { locale, t })
+        });
+        return true;
+      }
+
       if (req.method === 'GET' && url.pathname === '/api/overview') {
         sendJson(res, 200, {
           ok: true,
@@ -249,7 +264,10 @@ function createRouter(sessionsDir) {
       if (req.method === 'POST' && url.pathname === '/api/indexes/repair') {
         sendJson(res, 200, {
           ok: true,
-          repair: repairSessionIndexes(resolvedSessionsDir)
+          repair: repairSessionIndexes(resolvedSessionsDir, {
+            repairSessionIndex: true,
+            rewriteSessionIndex: true
+          })
         });
         return true;
       }

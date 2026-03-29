@@ -221,9 +221,70 @@ set "APP_DIR=%ROOT_DIR%app"
 set "NODE_EXE=%APP_DIR%\\runtime\\node.exe"
 if not exist "%NODE_EXE%" (
   echo Missing bundled runtime: "%NODE_EXE%"
+  echo.
+  pause
   exit /b 1
 )
+if "%~1"=="" goto interactive
+
 "%NODE_EXE%" --disable-warning=ExperimentalWarning "%APP_DIR%\\src\\cli.js" %*
+exit /b %ERRORLEVEL%
+
+:interactive
+title ${APP_NAME} CLI
+cls
+echo ${APP_NAME}
+echo.
+echo 1. Open web app
+echo 2. Repair Codex indexes
+echo 3. Run health check ^(doctor^)
+echo 4. Show CLI help
+echo 5. Exit
+echo.
+set /p MENU_CHOICE=Choose an action [1-5]:
+
+if "%MENU_CHOICE%"=="1" goto open_ui
+if "%MENU_CHOICE%"=="2" goto repair_indexes
+if "%MENU_CHOICE%"=="3" goto run_doctor
+if "%MENU_CHOICE%"=="4" goto show_help
+if "%MENU_CHOICE%"=="5" exit /b 0
+
+echo.
+echo Invalid selection.
+echo.
+pause
+goto interactive
+
+:open_ui
+call "%ROOT_DIR%${APP_NAME}.cmd"
+exit /b %ERRORLEVEL%
+
+:repair_indexes
+call "%ROOT_DIR%Repair Codex Indexes.cmd"
+exit /b %ERRORLEVEL%
+
+:run_doctor
+cls
+echo ${APP_NAME} - Doctor
+echo.
+"%NODE_EXE%" --disable-warning=ExperimentalWarning "%APP_DIR%\\src\\cli.js" doctor
+echo.
+pause
+exit /b %ERRORLEVEL%
+
+:show_help
+cls
+echo ${APP_NAME} - CLI Help
+echo.
+"%NODE_EXE%" --disable-warning=ExperimentalWarning "%APP_DIR%\\src\\cli.js" help
+echo.
+echo Double-click tips:
+echo - Use option 1 to open the browser UI
+echo - Use option 2 if migrated sessions are not visible in CodexManager
+echo - Use this script in a terminal for commands like: doctor, repair, migrate, restore
+echo.
+pause
+exit /b 0
 `;
 
   const repairLauncher = `@echo off
@@ -259,7 +320,7 @@ Quick start
 
 Included launchers
 - Codex Session Migrator.cmd : starts the local web app and opens your browser
-- codex-migrate.cmd          : full CLI wrapper
+- codex-migrate.cmd          : CLI wrapper with a no-flash double-click menu
 - Repair Codex Indexes.cmd   : rebuilds missing thread indexes and runs a health check
 `;
 

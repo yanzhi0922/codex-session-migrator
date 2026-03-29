@@ -565,6 +565,17 @@ function reducePromptForCompactCard(prompt) {
   return compact || String(prompt || '').trim() || null;
 }
 
+function summarizePreviewText(text, maxLength = 180) {
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return '';
+  }
+
+  return normalized.length > maxLength
+    ? `${normalized.slice(0, maxLength - 3)}...`
+    : normalized;
+}
+
 function buildApiUrl(path, params = {}) {
   const url = new URL(path, window.location.origin);
   url.searchParams.set('lang', state.locale);
@@ -963,6 +974,44 @@ function renderBackups() {
   }).join('');
 }
 
+function renderDoctorCallout(summary) {
+  const notices = [];
+
+  if (summary.missingSessionIndexCount) {
+    notices.push(t('doctor.calloutMissingSessionIndex', {
+      count: summary.missingSessionIndexCount
+    }));
+  }
+
+  if (summary.missingThreadCount) {
+    notices.push(t('doctor.calloutMissingThreads', {
+      count: summary.missingThreadCount
+    }));
+  }
+
+  if (summary.providerMismatchCount) {
+    notices.push(t('doctor.calloutProviderMismatch', {
+      count: summary.providerMismatchCount
+    }));
+  }
+
+  if (!notices.length) {
+    return `
+      <article class="doctor-callout is-healthy">
+        <strong>${escapeHtml(t('doctor.calloutTitleHealthy'))}</strong>
+        <p>${escapeHtml(t('doctor.calloutHealthy'))}</p>
+      </article>
+    `;
+  }
+
+  return `
+    <article class="doctor-callout">
+      <strong>${escapeHtml(t('doctor.calloutTitle'))}</strong>
+      ${notices.map((message) => `<p>${escapeHtml(message)}</p>`).join('')}
+    </article>
+  `;
+}
+
 function renderDoctor() {
   if (!state.doctor) {
     return;
@@ -973,6 +1022,8 @@ function renderDoctor() {
     [t('doctor.health'), state.doctor.ok ? t('doctor.healthy') : t('doctor.needsAttention')],
     [t('doctor.invalidMeta'), summary.invalidMetaCount],
     [t('doctor.missingProvider'), summary.missingProviderCount],
+    [t('doctor.workspaceReady'), summary.workspaceReadyCount],
+    [t('doctor.missingWorkspace'), summary.missingWorkspaceCount],
     [t('doctor.duplicateIds'), summary.duplicateIdCount],
     [t('doctor.missingThreads'), summary.missingThreadCount],
     [t('doctor.providerMismatches'), summary.providerMismatchCount],
@@ -986,6 +1037,7 @@ function renderDoctor() {
       <strong>${escapeHtml(value)}</strong>
     </div>
   `).join('') + `
+    ${renderDoctorCallout(summary)}
     <div class="summary-card summary-card-wide">
       <span class="summary-label">${escapeHtml(t('doctor.range'))}</span>
       <strong>${escapeHtml(t('common.scannedRange', {
@@ -1023,8 +1075,15 @@ function renderPreview(preview) {
 
   const lines = preview.items.slice(0, 12).map((item) => `
     <li>
-      <strong>${escapeHtml(item.relativePath)}</strong>
-      <span class="muted">${escapeHtml(item.from)} → ${escapeHtml(item.to)}${item.skipped ? ` ${escapeHtml(t('preview.skippedSuffix'))}` : ''}</span>
+      <div class="preview-item-header">
+        <strong>${escapeHtml(item.id || t('common.unknown'))}</strong>
+        <span class="muted">${escapeHtml(item.from)} → ${escapeHtml(item.to)}${item.skipped ? ` ${escapeHtml(t('preview.skippedSuffix'))}` : ''}</span>
+      </div>
+      <div class="preview-item-meta muted">
+        <span>${escapeHtml(item.timestampDisplay || item.timestamp || t('common.unknown'))}</span>
+        ${item.cwd ? `<span>${escapeHtml(compactWorkspacePath(item.cwd))}</span>` : ''}
+      </div>
+      ${item.preview ? `<p class="preview-item-body">${escapeHtml(summarizePreviewText(item.preview))}</p>` : ''}
     </li>
   `).join('');
 
@@ -1269,21 +1328,17 @@ async function loadData() {
   };
 
   await runBusyAction('loadingData', async () => {
-    const [overviewPayload, sessionsPayload, backupsPayload, doctorPayload] = await Promise.all([
-      fetchJson('/api/overview'),
-      fetchJson('/api/sessions', { params: query }),
-      fetchJson('/api/backups'),
-      fetchJson('/api/doctor')
-    ]);
+    const dashboard = await fetchJson('/api/dashboard', { params: query });
+    const sessionsPayload = dashboard.sessions || {};
 
-    state.overview = overviewPayload.overview;
+    state.overview = dashboard.overview;
     state.providers = sessionsPayload.providers || [];
     state.sessions = sessionsPayload.items || [];
     state.totalMatching = sessionsPayload.total || 0;
     state.page = sessionsPayload.page || 1;
     state.totalPages = sessionsPayload.totalPages || 1;
-    state.backups = backupsPayload.backups || [];
-    state.doctor = doctorPayload.doctor;
+    state.backups = dashboard.backups || [];
+    state.doctor = dashboard.doctor;
 
     renderProviderFilter();
     renderProviderSuggestions();

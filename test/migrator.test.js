@@ -2,6 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
 const path = require('path');
 const {
   createTempSessionsDir,
@@ -11,6 +12,7 @@ const {
 } = require('./helpers');
 const { parseFirstLine } = require('../src/scanner');
 const { migrateSessions, previewMigration, restoreFromBackup } = require('../src/migrator');
+const { getSessionIndexPath } = require('../src/session-indexes');
 
 test('previewMigration refuses to target every session without an explicit scope', () => {
   const { sessionsDir } = createTempSessionsDir();
@@ -70,9 +72,13 @@ test('migrateSessions repairs missing thread rows and session index entries', ()
   assert.equal(result.failed, 0);
   assert.equal(parseFirstLine(filePath).model_provider, 'crs');
   assert.equal(readThreadProvider(stateDbPath, 'session-missing-thread'), 'crs');
+  const sessionIndexEntries = fs.readFileSync(getSessionIndexPath(sessionsDir), 'utf8');
+  assert.match(sessionIndexEntries, /session-missing-thread/);
 
   const restored = restoreFromBackup(result.backupId, sessionsDir);
   assert.equal(restored.restored, 1);
   assert.equal(parseFirstLine(filePath).model_provider, 'openai');
   assert.equal(readThreadProvider(stateDbPath, 'session-missing-thread'), 'openai');
+  const restoredSessionIndexEntries = fs.readFileSync(getSessionIndexPath(sessionsDir), 'utf8');
+  assert.match(restoredSessionIndexEntries, /session-missing-thread/);
 });
