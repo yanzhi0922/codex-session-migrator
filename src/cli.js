@@ -4,6 +4,7 @@
 const { exec, spawn } = require('child_process');
 const readline = require('readline');
 const { startServer } = require('./server');
+const { buildSessionExport, writeSessionExport } = require('./exporter');
 const { createTranslator, resolveLocale } = require('./i18n');
 const { getOverview, getSessionsDir, listBackups, runDoctor, scanSessions } = require('./scanner');
 const { migrateSessions, previewMigration, restoreFromBackup } = require('./migrator');
@@ -93,6 +94,7 @@ function printHelp(flags = {}) {
     t('cli.help.commandDoctor'),
     t('cli.help.commandBackups'),
     t('cli.help.commandMigrate'),
+    t('cli.help.commandExport'),
     t('cli.help.commandRepair'),
     t('cli.help.commandRestore'),
     '',
@@ -106,6 +108,7 @@ function printHelp(flags = {}) {
     t('cli.help.exampleServe'),
     t('cli.help.exampleList'),
     t('cli.help.exampleMigrate'),
+    t('cli.help.exampleExport'),
     t('cli.help.exampleRepair'),
     t('cli.help.exampleRestore'),
     ''
@@ -369,6 +372,39 @@ async function handleRestore(flags) {
   }
 }
 
+function handleExport(flags) {
+  const { locale, t } = getCliI18n(flags);
+  const selection = toSelection(flags);
+  const artifact = buildSessionExport(
+    flags['sessions-dir'],
+    selection,
+    flags.format || 'markdown',
+    {
+      locale,
+      t
+    }
+  );
+  const saved = writeSessionExport(flags['sessions-dir'], artifact, {
+    outputPath: flags.output
+  });
+
+  if (flags.json) {
+    console.log(JSON.stringify({
+      ok: true,
+      format: saved.format,
+      fileName: saved.fileName,
+      outputPath: saved.outputPath,
+      sessionCount: saved.sessionCount,
+      exportedAt: saved.exportedAt
+    }, null, 2));
+    return;
+  }
+
+  console.log(`${t('cli.labels.exportFormat')}: ${saved.format}`);
+  console.log(`${t('cli.labels.selectedSessions')}: ${saved.sessionCount}`);
+  console.log(`${t('cli.labels.exportedFile')}: ${saved.outputPath}`);
+}
+
 function handleRepair(flags) {
   const { t } = getCliI18n(flags);
   const result = repairSessionIndexes(getSessionsDir(flags['sessions-dir']), {
@@ -424,6 +460,9 @@ async function main() {
       break;
     case 'migrate':
       await handleMigrate(flags);
+      break;
+    case 'export':
+      handleExport(flags);
       break;
     case 'repair':
       handleRepair(flags);

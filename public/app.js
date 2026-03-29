@@ -3,6 +3,8 @@ const STORAGE_KEYS = {
   preferences: 'codex-session-migrator:preferences'
 };
 
+const EXPORT_FORMATS = ['markdown', 'html', 'json', 'jsonl', 'csv', 'txt'];
+
 const state = {
   locale: resolveInitialLocale(),
   localeOptions: [],
@@ -10,6 +12,7 @@ const state = {
   provider: 'all',
   search: '',
   limit: 50,
+  exportFormat: 'markdown',
   page: 1,
   totalPages: 1,
   totalMatching: 0,
@@ -17,7 +20,7 @@ const state = {
   providers: [],
   selected: new Set(),
   overview: null,
-  backups: [],
+  backups: null,
   doctor: null,
   activeSessionPath: '',
   activeSession: null,
@@ -26,7 +29,9 @@ const state = {
   loadingSession: false,
   busyAction: '',
   lastPreview: null,
-  expandedPrompts: new Set()
+  expandedPrompts: new Set(),
+  deferredPanelsHandle: null,
+  deferredPanelsRequestId: 0
 };
 
 const elements = {
@@ -35,6 +40,9 @@ const elements = {
   clearSelectionButton: document.getElementById('clearSelectionButton'),
   doctorIssues: document.getElementById('doctorIssues'),
   doctorSummary: document.getElementById('doctorSummary'),
+  exportButton: document.getElementById('exportButton'),
+  exportFormatSelect: document.getElementById('exportFormatSelect'),
+  exportScopeLabel: document.getElementById('exportScopeLabel'),
   filterForm: document.getElementById('filterForm'),
   languageSelect: document.getElementById('languageSelect'),
   latestSessionAt: document.getElementById('latestSessionAt'),
@@ -56,7 +64,10 @@ const elements = {
   searchInput: document.getElementById('searchInput'),
   selectedCount: document.getElementById('selectedCount'),
   sessionDetailClose: document.getElementById('sessionDetailClose'),
+  sessionDetailNext: document.getElementById('sessionDetailNext'),
   selectionMode: document.getElementById('selectionMode'),
+  sessionDetailPosition: document.getElementById('sessionDetailPosition'),
+  sessionDetailPrev: document.getElementById('sessionDetailPrev'),
   selectPageButton: document.getElementById('selectPageButton'),
   sessionDetailBody: document.getElementById('sessionDetailBody'),
   sessionDetailModal: document.getElementById('sessionDetailModal'),
@@ -100,6 +111,7 @@ function savePreferences() {
     provider: state.provider,
     search: state.search,
     limit: state.limit,
+    exportFormat: state.exportFormat,
     targetProvider: elements.targetProviderInput.value.trim()
   }));
 }
@@ -114,6 +126,7 @@ function syncControlsFromState() {
   elements.providerFilter.value = state.provider;
   elements.searchInput.value = state.search;
   elements.limitFilter.value = String(state.limit);
+  elements.exportFormatSelect.value = state.exportFormat;
 }
 
 function getValue(object, path) {
@@ -132,6 +145,15 @@ function interpolate(template, values = {}) {
 function t(key, values = {}) {
   const template = getValue(state.messages, key);
   return typeof template === 'string' ? interpolate(template, values) : key;
+}
+
+function tf(key, fallbackEn, fallbackZh, values = {}) {
+  const translated = t(key, values);
+  if (translated !== key) {
+    return translated;
+  }
+
+  return interpolate(state.locale === 'zh-CN' ? fallbackZh : fallbackEn, values);
 }
 
 function escapeHtml(value) {
@@ -576,6 +598,101 @@ function summarizePreviewText(text, maxLength = 180) {
     : normalized;
 }
 
+function stripPromptLineForSummary(line) {
+  const normalized = String(line || '').trim();
+  if (!normalized || isPromptFence(normalized)) {
+    return '';
+  }
+
+  return normalized
+    .replace(/^\s*#{1,6}\s+/, '')
+    .replace(/^\s*>\s?/, '')
+    .replace(/^\s*[-*+]\s+/, '')
+    .replace(/^\s*\d+[.)]\s+/, '')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*\n]+)\*/g, '$1')
+    .replace(/!\[[^\]]*]\([^)]+\)/g, '')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function buildPromptSummaryText(prompt, options = {}) {
+  const maxLines = Math.max(2, Number(options.maxLines) || 4);
+  const maxLength = Math.max(120, Number(options.maxLength) || 280);
+  const reduced = reducePromptForCompactCard(prompt) || String(prompt || '').trim();
+  if (!reduced) {
+    return '';
+  }
+
+  const lines = reduced
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => stripPromptLineForSummary(line))
+    .filter(Boolean);
+
+  let summary = lines.slice(0, maxLines).join('\n');
+  if (!summary) {
+    summary = reduced.replace(/\s+/g, ' ').trim();
+  }
+
+  if (summary.length > maxLength) {
+    return `${summary.slice(0, maxLength - 1).trimEnd()}…`;
+  }
+
+  if (lines.length > maxLines) {
+    return `${summary}…`;
+  }
+
+  return summary;
+}
+
+function renderPromptSummaryMarkup(text, highlightQuery) {
+  const html = escapeHtml(String(text || '')).replace(/\n/g, '<br>');
+  return highlightPromptMarkup(html, highlightQuery);
+}
+
+function getLatestUsefulPromptPreview(prompts) {
+  const items = Array.isArray(prompts)
+    ? prompts.filter((prompt) => Boolean(String(prompt || '').trim()))
+    : [];
+
+  for (const prompt of items) {
+    const summary = buildPromptSummaryText(prompt);
+    if (summary) {
+      return summary;
+    }
+  }
+
+  return buildPromptSummaryText(items[0] || '');
+}
+
+function renderSessionPromptPreview(item) {
+  const prompts = getSessionPrompts(item);
+  const summary = getLatestUsefulPromptPreview(prompts);
+
+  if (!summary) {
+    return `<div class="prompt-preview-card is-empty">${escapeHtml(t('common.noPreview'))}</div>`;
+  }
+
+  const extraCount = Math.max(0, prompts.length - 1);
+  const moreLabel = state.locale === 'zh-CN' ? `+${extraCount} 条` : `+${extraCount}`;
+  const moreTitle = state.locale === 'zh-CN'
+    ? `详情时间线中还有 ${extraCount} 条更早 prompt`
+    : `${extraCount} earlier prompts in the detail timeline`;
+
+  return `
+    <div class="prompt-preview-card">
+      <div class="prompt-preview-meta">
+        <span class="prompt-preview-badge">${escapeHtml(tf('sessions.preview.latest', 'Latest', '最近一条'))}</span>
+        ${extraCount ? `<span class="prompt-preview-more-badge" title="${escapeHtml(moreTitle)}">${escapeHtml(moreLabel)}</span>` : ''}
+      </div>
+      <div class="prompt-preview-summary">${renderPromptSummaryMarkup(summary, state.search)}</div>
+    </div>
+  `;
+}
+
 function buildApiUrl(path, params = {}) {
   const url = new URL(path, window.location.origin);
   url.searchParams.set('lang', state.locale);
@@ -623,6 +740,63 @@ async function fetchJson(path, options = {}) {
   return payload;
 }
 
+function parseDownloadFileName(response, fallback = 'codex-session-export.txt') {
+  const disposition = response.headers.get('content-disposition') || '';
+  const match = disposition.match(/filename="?([^";]+)"?/i);
+  return match && match[1] ? match[1] : fallback;
+}
+
+async function fetchDownload(path, options = {}) {
+  const requestOptions = {
+    method: options.method || 'POST',
+    headers: {
+      ...(options.headers || {})
+    }
+  };
+
+  if (options.body !== undefined) {
+    requestOptions.headers['Content-Type'] = 'application/json';
+    requestOptions.body = JSON.stringify({
+      ...options.body,
+      lang: state.locale
+    });
+  }
+
+  const response = await fetch(buildApiUrl(path, options.params), requestOptions);
+  if (!response.ok) {
+    const text = await response.text();
+    let payload = null;
+
+    try {
+      payload = text ? JSON.parse(text) : null;
+    } catch {
+    }
+
+    throw new Error(payload?.error || text || `Request failed: ${response.status}`);
+  }
+
+  return {
+    blob: await response.blob(),
+    fileName: parseDownloadFileName(response)
+  };
+}
+
+function triggerBrowserDownload(blob, fileName) {
+  const downloadUrl = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+
+  link.href = downloadUrl;
+  link.download = fileName;
+  link.style.display = 'none';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+
+  window.setTimeout(() => {
+    URL.revokeObjectURL(downloadUrl);
+  }, 1000);
+}
+
 function setMessage(type, message) {
   elements.messagePanel.className = `message-panel ${type}`;
   elements.messagePanel.textContent = message;
@@ -643,6 +817,8 @@ function setBusy(action = '') {
 
   const disabledElements = [
     elements.clearSelectionButton,
+    elements.exportButton,
+    elements.exportFormatSelect,
     elements.languageSelect,
     elements.limitFilter,
     elements.nextPageButton,
@@ -655,6 +831,8 @@ function setBusy(action = '') {
     elements.runButton,
     elements.searchInput,
     elements.selectPageButton,
+    elements.sessionDetailNext,
+    elements.sessionDetailPrev,
     elements.targetProviderInput,
     elements.togglePageSelection
   ];
@@ -662,6 +840,8 @@ function setBusy(action = '') {
   for (const element of disabledElements) {
     element.disabled = busy;
   }
+
+  updateDetailNavigation();
 }
 
 function renderLanguageOptions() {
@@ -671,6 +851,38 @@ function renderLanguageOptions() {
       return `<option value="${escapeHtml(item.code)}"${selected}>${escapeHtml(item.label)}</option>`;
     })
     .join('');
+}
+
+function getExportFormatLabel(format) {
+  if (format === 'markdown') {
+    return 'Markdown (.md)';
+  }
+
+  if (format === 'jsonl') {
+    return 'JSONL (.jsonl)';
+  }
+
+  if (format === 'txt') {
+    return state.locale === 'zh-CN' ? '纯文本 (.txt)' : 'Plain text (.txt)';
+  }
+
+  return `${format.toUpperCase()} (.${format})`;
+}
+
+function renderExportControls() {
+  elements.exportScopeLabel.textContent = t('export.scopeLabel');
+  elements.exportFormatSelect.innerHTML = EXPORT_FORMATS.map((format) => {
+    const selected = format === state.exportFormat ? ' selected' : '';
+    return `<option value="${escapeHtml(format)}"${selected}>${escapeHtml(getExportFormatLabel(format))}</option>`;
+  }).join('');
+
+  const exportLabel = t('export.button');
+  const buttonTitle = t('export.buttonTitle');
+
+  elements.exportButton.textContent = exportLabel;
+  elements.exportButton.title = buttonTitle;
+  elements.exportButton.setAttribute('aria-label', buttonTitle);
+  elements.exportFormatSelect.setAttribute('aria-label', t('export.formatLabel'));
 }
 
 function applyStaticText() {
@@ -693,6 +905,8 @@ function applyStaticText() {
   document.querySelectorAll('[data-i18n-aria-label]').forEach((node) => {
     node.setAttribute('aria-label', t(node.dataset.i18nAriaLabel));
   });
+
+  renderExportControls();
 }
 
 function renderProviderFilter() {
@@ -841,6 +1055,7 @@ function syncDetailModalVisibility() {
   elements.sessionDetailModal.classList.toggle('is-open', state.isDetailOpen);
   elements.sessionDetailModal.setAttribute('aria-hidden', String(!state.isDetailOpen));
   document.body.classList.toggle('detail-modal-open', state.isDetailOpen);
+  updateDetailNavigation();
 }
 
 function focusSessionRow(filePath) {
@@ -875,6 +1090,45 @@ function closeSessionDetail(options = {}) {
   }
 }
 
+function getActiveSessionIndex() {
+  if (!state.activeSessionPath) {
+    return -1;
+  }
+
+  return state.sessions.findIndex((item) => item.filePath === state.activeSessionPath);
+}
+
+function updateDetailNavigation() {
+  const activeIndex = getActiveSessionIndex();
+  const total = state.sessions.length;
+  const hasSessions = total > 0;
+
+  elements.sessionDetailPosition.textContent = hasSessions && activeIndex >= 0
+    ? `${activeIndex + 1} / ${total}`
+    : `0 / ${total}`;
+
+  const previousLabel = t('common.previous');
+  const nextLabel = t('common.next');
+
+  elements.sessionDetailPrev.disabled = !hasSessions || activeIndex <= 0 || Boolean(state.busyAction);
+  elements.sessionDetailNext.disabled = !hasSessions || activeIndex < 0 || activeIndex >= total - 1 || Boolean(state.busyAction);
+  elements.sessionDetailPrev.setAttribute('aria-label', previousLabel);
+  elements.sessionDetailNext.setAttribute('aria-label', nextLabel);
+  elements.sessionDetailPrev.title = previousLabel;
+  elements.sessionDetailNext.title = nextLabel;
+}
+
+async function navigateSessionDetail(offset) {
+  const activeIndex = getActiveSessionIndex();
+  const nextIndex = activeIndex + Number(offset || 0);
+
+  if (activeIndex < 0 || nextIndex < 0 || nextIndex >= state.sessions.length) {
+    return;
+  }
+
+  await loadSessionDetail(state.sessions[nextIndex].filePath);
+}
+
 function renderSessions() {
   elements.pageStatus.textContent = t('sessions.pageStatus', {
     page: state.page,
@@ -898,12 +1152,7 @@ function renderSessions() {
     const checked = state.selected.has(item.filePath) ? ' checked' : '';
     const active = state.isDetailOpen && state.activeSessionPath === item.filePath ? ' class="is-active"' : '';
     const disabled = state.busyAction ? ' disabled' : '';
-    const promptPreview = renderPromptStack(getSessionPrompts(item), {
-      compact: true,
-      maxPrompts: 2,
-      contextKey: item.filePath,
-      highlightQuery: state.search
-    });
+    const promptPreview = renderSessionPromptPreview(item);
     const cwd = item.cwd || '—';
     const workspaceLabel = compactWorkspacePath(cwd);
     const timestamp = item.timestampDisplay || item.timestamp || t('common.unknown');
@@ -938,6 +1187,11 @@ function renderSessions() {
 }
 
 function renderBackups() {
+  if (state.backups === null) {
+    elements.backupsList.innerHTML = `<div class="empty-state">${escapeHtml(t('common.loading'))}</div>`;
+    return;
+  }
+
   if (!state.backups.length) {
     elements.backupsList.innerHTML = `<div class="empty-state">${escapeHtml(t('backups.empty'))}</div>`;
     return;
@@ -1013,6 +1267,12 @@ function renderDoctorCallout(summary) {
 }
 
 function renderDoctor() {
+  if (state.doctor === null) {
+    elements.doctorSummary.innerHTML = `<div class="empty-state">${escapeHtml(t('common.loading'))}</div>`;
+    elements.doctorIssues.innerHTML = '';
+    return;
+  }
+
   if (!state.doctor) {
     return;
   }
@@ -1112,6 +1372,8 @@ function renderPreview(preview) {
 }
 
 function renderSessionDetail() {
+  updateDetailNavigation();
+
   if (state.loadingSession) {
     elements.sessionDetailBody.innerHTML = `<div class="empty-state">${escapeHtml(t('detail.loading'))}</div>`;
     return;
@@ -1264,7 +1526,64 @@ async function runBusyAction(action, callback) {
     renderStats();
     renderSessions();
     renderBackups();
+    renderDoctor();
   }
+}
+
+function cancelDeferredPanels() {
+  if (state.deferredPanelsHandle) {
+    window.clearTimeout(state.deferredPanelsHandle);
+    state.deferredPanelsHandle = null;
+  }
+}
+
+function createEmptyDoctorState() {
+  return {
+    ok: false,
+    summary: {
+      invalidMetaCount: 0,
+      missingProviderCount: 0,
+      workspaceReadyCount: 0,
+      missingWorkspaceCount: 0,
+      duplicateIdCount: 0,
+      missingThreadCount: 0,
+      providerMismatchCount: 0,
+      missingSessionIndexCount: 0,
+      totalFiles: 0,
+      oldestTimestampDisplay: '',
+      latestTimestampDisplay: ''
+    },
+    issues: []
+  };
+}
+
+function scheduleDeferredPanels() {
+  cancelDeferredPanels();
+  const requestId = state.deferredPanelsRequestId + 1;
+  state.deferredPanelsRequestId = requestId;
+
+  state.deferredPanelsHandle = window.setTimeout(async () => {
+    state.deferredPanelsHandle = null;
+
+    const [backupsResult, doctorResult] = await Promise.allSettled([
+      fetchJson('/api/backups'),
+      fetchJson('/api/doctor')
+    ]);
+
+    if (requestId !== state.deferredPanelsRequestId) {
+      return;
+    }
+
+    state.backups = backupsResult.status === 'fulfilled'
+      ? (backupsResult.value.backups || [])
+      : [];
+    state.doctor = doctorResult.status === 'fulfilled'
+      ? (doctorResult.value.doctor || createEmptyDoctorState())
+      : createEmptyDoctorState();
+
+    renderBackups();
+    renderDoctor();
+  }, 32);
 }
 
 async function loadSessionDetail(filePath) {
@@ -1321,11 +1640,20 @@ async function loadData() {
 
   const query = {
     includePreview: 1,
+    includeBackups: 0,
+    includeDoctor: 0,
     provider: state.provider === 'all' ? '' : state.provider,
     search: state.search,
     page: state.page,
     limit: state.limit
   };
+
+  cancelDeferredPanels();
+  state.deferredPanelsRequestId += 1;
+  state.backups = null;
+  state.doctor = null;
+  renderBackups();
+  renderDoctor();
 
   await runBusyAction('loadingData', async () => {
     const dashboard = await fetchJson('/api/dashboard', { params: query });
@@ -1337,17 +1665,15 @@ async function loadData() {
     state.totalMatching = sessionsPayload.total || 0;
     state.page = sessionsPayload.page || 1;
     state.totalPages = sessionsPayload.totalPages || 1;
-    state.backups = dashboard.backups || [];
-    state.doctor = dashboard.doctor;
 
     renderProviderFilter();
     renderProviderSuggestions();
     renderStats();
     renderSessions();
-    renderBackups();
-    renderDoctor();
     renderPreview(state.lastPreview);
   });
+
+  scheduleDeferredPanels();
 
   if (state.isDetailOpen && state.activeSessionPath) {
     await loadSessionDetail(state.activeSessionPath);
@@ -1376,6 +1702,36 @@ function hasScopedSelection() {
 function clearPreview() {
   state.lastPreview = null;
   renderPreview(null);
+}
+
+async function handleExport() {
+  const format = elements.exportFormatSelect.value || state.exportFormat || 'markdown';
+  let selection = getSelectionPayload();
+
+  state.exportFormat = format;
+  savePreferences();
+
+  if (!hasScopedSelection()) {
+    const confirmed = window.confirm(t('messages.exportConfirm', {
+      count: state.overview?.totals.sessions || 0
+    }));
+
+    if (!confirmed) {
+      return;
+    }
+
+    selection = { allowAll: true };
+  }
+
+  const download = await runBusyAction('exporting', () => fetchDownload('/api/exports/download', {
+    body: {
+      selection,
+      format
+    }
+  }));
+
+  triggerBrowserDownload(download.blob, download.fileName);
+  setMessage('success', t('export.success', { fileName: download.fileName }));
 }
 
 async function handlePreview() {
@@ -1548,9 +1904,14 @@ function bindEvents() {
   });
 
   elements.refreshButton.addEventListener('click', () => execute(loadData));
+  elements.exportButton.addEventListener('click', () => execute(handleExport));
   elements.repairIndexesButton.addEventListener('click', () => execute(handleRepairIndexes));
   elements.previewButton.addEventListener('click', () => execute(handlePreview));
   elements.runButton.addEventListener('click', () => execute(handleRun));
+  elements.exportFormatSelect.addEventListener('change', () => {
+    state.exportFormat = elements.exportFormatSelect.value || 'markdown';
+    savePreferences();
+  });
 
   elements.prevPageButton.addEventListener('click', () => {
     if (state.page <= 1) {
@@ -1679,6 +2040,14 @@ function bindEvents() {
     closeSessionDetail();
   });
 
+  elements.sessionDetailPrev.addEventListener('click', () => {
+    execute(() => navigateSessionDetail(-1));
+  });
+
+  elements.sessionDetailNext.addEventListener('click', () => {
+    execute(() => navigateSessionDetail(1));
+  });
+
   elements.sessionDetailModal.addEventListener('click', (event) => {
     if (event.target.classList.contains('detail-modal-backdrop')) {
       closeSessionDetail();
@@ -1689,6 +2058,28 @@ function bindEvents() {
     if (event.key === 'Escape' && state.isDetailOpen) {
       event.preventDefault();
       closeSessionDetail();
+      return;
+    }
+
+    if (!state.isDetailOpen) {
+      return;
+    }
+
+    const targetTag = event.target?.tagName;
+    const isTypingContext = event.target?.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(targetTag);
+    if (isTypingContext) {
+      return;
+    }
+
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      execute(() => navigateSessionDetail(-1));
+      return;
+    }
+
+    if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      execute(() => navigateSessionDetail(1));
     }
   });
 
@@ -1723,6 +2114,7 @@ async function init() {
   state.provider = preferences.provider || 'all';
   state.search = preferences.search || '';
   state.limit = Number(preferences.limit) || 50;
+  state.exportFormat = EXPORT_FORMATS.includes(preferences.exportFormat) ? preferences.exportFormat : 'markdown';
 
   elements.targetProviderInput.value = preferences.targetProvider || '';
 

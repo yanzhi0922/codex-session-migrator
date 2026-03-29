@@ -8,7 +8,7 @@ Move Codex Desktop session history across model providers without losing your ar
 
 中文说明：这是一个用于管理 `~/.codex/sessions` 的本地工具，支持在不同 provider 之间迁移会话、自动备份、恢复快照，并且现在同时支持英文与简体中文界面。
 
-`Codex Session Migrator` is a zero-dependency local toolkit for inspecting, migrating, repairing, backing up, and restoring Codex session files stored under `~/.codex/sessions`. It ships as both a browser UI and a CLI, and it is designed to be safe enough for real personal archives rather than one-off JSONL hacks.
+`Codex Session Migrator` is a zero-dependency local toolkit for inspecting, migrating, repairing, exporting, backing up, and restoring Codex session files stored under `~/.codex/sessions`. It ships as both a browser UI and a CLI, and it is designed to be safe enough for real personal archives rather than one-off JSONL hacks.
 
 ## Why this exists
 
@@ -18,6 +18,7 @@ This tool solves that with:
 
 - A local web app for browsing sessions by provider, search term, and path.
 - Built-in English / Simplified Chinese language switching for both the web UI and CLI.
+- Session export in `markdown`, `html`, `json`, `jsonl`, `csv`, and `txt`.
 - Manifest-backed backups before every real migration.
 - Restore support that can roll back from any saved snapshot.
 - A `doctor` command that flags malformed session files, missing workspace paths, missing SQLite thread indexes, and missing `session_index` entries.
@@ -28,14 +29,16 @@ This tool solves that with:
 ## Features
 
 - Safe provider migration that rewrites `session_meta` and keeps SQLite thread indexes in sync.
+- Structured session export that extracts transcript turns and useful metadata instead of dumping raw JSONL.
 - Compatibility diagnostics that explain why sessions may still stay hidden in CodexManager.
 - Repair flows that refresh both SQLite `threads` and `session_index.jsonl`, not just one side of the index state.
 - Explicit backup snapshots stored under `__backups__/.../manifest.json`.
 - Restore flow with pre-restore safety snapshots.
 - Browser UI with provider overview, searchable session table, concise migration preview, backup list, and health report.
-- Better UX with remembered filters, provider suggestion hints, clickable provider chips, and a session detail inspector.
-- Single-request dashboard loading for a faster, more consistent web UI refresh cycle.
-- CLI commands for `serve`, `list`, `stats`, `doctor`, `repair`, `migrate`, `restore`, and `backups`.
+- Better UX with remembered filters, provider suggestion hints, clickable provider chips, export controls, and a modal session detail inspector.
+- Prompt Preview that shows the latest useful prompt first and keeps the full reversed prompt timeline in the detail modal.
+- Deferred backup / Doctor loading so the main session table appears faster on larger libraries.
+- CLI commands for `serve`, `list`, `stats`, `doctor`, `repair`, `migrate`, `export`, `restore`, and `backups`.
 - Protective guardrail against accidental full-library migration unless `--all` is explicitly used.
 - Works on Windows, macOS, and Linux.
 
@@ -144,6 +147,13 @@ codex-migrate migrate --provider openai --target crs --yes
 codex-migrate restore --backup 20260328180102-migration-ab12cd --yes
 ```
 
+### Export sessions
+
+```bash
+codex-migrate export --provider codexmanager --format markdown
+codex-migrate export --all --format jsonl --output ./exports/
+```
+
 ## Safety model
 
 This project is intentionally conservative:
@@ -181,6 +191,7 @@ The local app exposes JSON endpoints:
 - `GET /api/session?path=...`
 - `GET /api/backups`
 - `GET /api/doctor`
+- `POST /api/exports/download`
 - `POST /api/migrations/preview`
 - `POST /api/migrations/run`
 - `POST /api/indexes/repair`
@@ -209,6 +220,7 @@ Current test coverage includes:
 
 - Session scanning and provider stats
 - Prompt preview extraction
+- Session export generation and download coverage
 - English / Chinese localization paths
 - Malformed file detection
 - Migration preview safety guard

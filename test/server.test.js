@@ -97,6 +97,66 @@ test('HTTP API can repair missing indexes', async () => {
   }
 });
 
+test('HTTP API supports lightweight dashboard fetches and export downloads', async () => {
+  const { sessionsDir } = createTempSessionsDir();
+  writeSessionFile(sessionsDir, path.join('2026', '03', '28', 'export-api.jsonl'), {
+    id: 'export-api',
+    provider: 'codexmanager',
+    prompt: 'Export this session as markdown'
+  });
+
+  const app = await startServer({
+    host: '127.0.0.1',
+    port: 0,
+    sessionsDir
+  });
+
+  const address = app.server.address();
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  try {
+    const dashboardResponse = await fetch(`${baseUrl}/api/dashboard?includePreview=1&includeDoctor=0&includeBackups=0`);
+    const dashboardPayload = await dashboardResponse.json();
+    assert.equal(dashboardPayload.ok, true);
+    assert.equal(dashboardPayload.sessions.total, 1);
+    assert.equal(dashboardPayload.doctor, null);
+    assert.deepEqual(dashboardPayload.backups, []);
+
+    const exportResponse = await fetch(`${baseUrl}/api/exports/download`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        lang: 'zh-CN',
+        format: 'markdown',
+        selection: {
+          allowAll: true
+        }
+      })
+    });
+
+    assert.equal(exportResponse.ok, true);
+    assert.match(exportResponse.headers.get('content-type') || '', /text\/markdown/i);
+    assert.match(exportResponse.headers.get('content-disposition') || '', /attachment; filename=/i);
+
+    const markdown = await exportResponse.text();
+    assert.match(markdown, /Codex Session Export/);
+    assert.match(markdown, /export-api/);
+    assert.match(markdown, /Export this session as markdown/);
+  } finally {
+    await new Promise((resolve, reject) => {
+      app.server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
+  }
+});
+
 test('startServer falls back to the next port when the default is busy', async () => {
   const firstApp = await startServer({
     host: '127.0.0.1',

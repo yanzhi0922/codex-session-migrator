@@ -535,11 +535,10 @@ function paginate(items, { page = 1, limit = 50 } = {}) {
   };
 }
 
-function scanSessions(sessionsDir, options = {}) {
+function buildSessionsPayloadFromAllItems(sessionsDir, allItems, options = {}) {
   const dir = getSessionsDir(sessionsDir);
   const { locale } = resolveTranslator(options);
   const includePreview = Boolean(options.search || options.includePreview);
-  const allItems = getAllSessions(dir, { locale });
   const filtered = filterSessions(allItems, options);
   const paginated = paginate(filtered, options);
   const items = includePreview
@@ -561,14 +560,9 @@ function scanSessions(sessionsDir, options = {}) {
   };
 }
 
-function getProviders(sessionsDir) {
-  return summarizeProviders(getAllSessions(sessionsDir));
-}
-
-function getOverview(sessionsDir, options = {}) {
+function buildOverviewFromItems(sessionsDir, items, options = {}) {
   const dir = getSessionsDir(sessionsDir);
   const { locale } = resolveTranslator(options);
-  const items = getAllSessions(dir, { locale });
   const providers = summarizeProviders(items);
   const backups = listBackupSnapshots(dir);
   const bytes = items.reduce((sum, item) => sum + item.size, 0);
@@ -586,6 +580,37 @@ function getOverview(sessionsDir, options = {}) {
     latestSessionAt: items.length ? items[0].timestamp : null,
     latestSessionAtDisplay: items.length ? items[0].timestampDisplay : '',
     backups: backups.slice(0, 5)
+  };
+}
+
+function scanSessions(sessionsDir, options = {}) {
+  const dir = getSessionsDir(sessionsDir);
+  const { locale } = resolveTranslator(options);
+  const allItems = getAllSessions(dir, { locale });
+  return buildSessionsPayloadFromAllItems(dir, allItems, options);
+}
+
+function getProviders(sessionsDir) {
+  return summarizeProviders(getAllSessions(sessionsDir));
+}
+
+function getOverview(sessionsDir, options = {}) {
+  const dir = getSessionsDir(sessionsDir);
+  const { locale } = resolveTranslator(options);
+  const items = getAllSessions(dir, { locale });
+  return buildOverviewFromItems(dir, items, { locale });
+}
+
+function getDashboardData(sessionsDir, options = {}) {
+  const dir = getSessionsDir(sessionsDir);
+  const { locale, t } = resolveTranslator(options);
+  const allItems = getAllSessions(dir, { locale });
+
+  return {
+    overview: buildOverviewFromItems(dir, allItems, { locale }),
+    sessions: buildSessionsPayloadFromAllItems(dir, allItems, options),
+    backups: options.includeBackups === false ? [] : listBackups(dir, { locale }),
+    doctor: options.includeDoctor === false ? null : runDoctor(dir, { locale, t })
   };
 }
 
@@ -768,6 +793,7 @@ module.exports = {
   extractUserInputText,
   filterSessions,
   getAllSessions,
+  getDashboardData,
   getOverview,
   getProviders,
   getSessionDetail,

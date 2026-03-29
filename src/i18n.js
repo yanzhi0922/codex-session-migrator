@@ -24,7 +24,8 @@ const dictionaries = {
       firstLineInvalidJson: 'First line is not valid JSON.',
       firstLineNotSessionMeta: 'First line is not a session_meta record.',
       backupManifestMissing: 'Backup manifest not found: {path}',
-      missingQueryPath: 'Missing required query parameter: path'
+      missingQueryPath: 'Missing required query parameter: path',
+      exportSelectionEmpty: 'No sessions matched the current export selection.'
     },
     doctor: {
       invalidMeta: 'The first JSONL line is missing or cannot be parsed as session_meta.',
@@ -49,6 +50,7 @@ const dictionaries = {
         commandDoctor: '  doctor     Check for invalid or suspicious session files',
         commandBackups: '  backups    List backup snapshots',
         commandMigrate: '  migrate    Re-tag sessions to a new provider',
+        commandExport: '  export     Export sessions to structured files',
         commandRepair: '  repair     Rebuild missing SQLite / session_index entries',
         commandRestore: '  restore    Restore sessions from a backup snapshot',
         flagSessionsDir: '  --sessions-dir <path>   Override the Codex sessions directory',
@@ -58,6 +60,7 @@ const dictionaries = {
         exampleServe: '  codex-migrate serve --open',
         exampleList: '  codex-migrate list --provider openai --limit 20',
         exampleMigrate: '  codex-migrate migrate --provider openai --target crs --dry-run',
+        exampleExport: '  codex-migrate export --provider codexmanager --format markdown',
         exampleRepair: '  codex-migrate repair',
         exampleRestore: '  codex-migrate restore --backup 20260328180102-migration-ab12cd --yes'
       },
@@ -81,6 +84,8 @@ const dictionaries = {
         range: 'Range',
         noBackups: 'No backups found.',
         selectedSessions: 'Selected sessions',
+        exportFormat: 'Export format',
+        exportedFile: 'Exported file',
         actionable: 'Actionable',
         skipped: 'Skipped',
         targetProvider: 'Target provider',
@@ -107,7 +112,9 @@ const dictionaries = {
       },
       errors: {
         targetRequired: '--target is required for migrate.',
-        backupRequired: '--backup is required for restore.'
+        backupRequired: '--backup is required for restore.',
+        exportFormatRequired: '--format is required for export.',
+        exportFormatInvalid: 'Unsupported export format: {format}.'
       },
       table: {
         noSessions: 'No sessions matched the current filters.',
@@ -133,6 +140,8 @@ const dictionaries = {
         expand: 'Expand',
         collapse: 'Collapse',
         morePrompts: '+{count} more',
+        previous: 'Previous',
+        next: 'Next',
         backup: 'Backup',
         preRestoreBackup: 'Pre-restore backup',
         noPreview: 'No preview available',
@@ -224,6 +233,14 @@ const dictionaries = {
         metadataHint: 'Path stays here so the main table can stay readable.',
         promptCount: '{count} prompts'
       },
+      export: {
+        scopeLabel: 'Export scope',
+        formatLabel: 'Export format',
+        button: 'Export',
+        buttonTitle: 'Export the current selection, or the current filtered scope when nothing is selected',
+        success: 'Export ready: {fileName}',
+        failed: 'Export failed.'
+      },
       backups: {
         eyebrow: 'Backups',
         title: 'Rollback points',
@@ -270,6 +287,7 @@ const dictionaries = {
       },
       busy: {
         loadingData: 'Refreshing sessions, backups, and health checks...',
+        exporting: 'Preparing your export download...',
         previewing: 'Preparing a migration preview...',
         migrating: 'Running the migration and writing a safety backup...',
         restoring: 'Restoring files from the selected backup...',
@@ -285,6 +303,7 @@ const dictionaries = {
         migrationFinished: 'Migration finished. {migrated} migrated, {skipped} skipped, {failed} failed.{backupSuffix}',
         restoreFinished: 'Restore finished. {restored} restored, {failed} failed.{backupSuffix}',
         repairFinished: 'Repair finished. {insertedThreads} threads inserted, {updatedThreads} rows updated, {addedSessionIndexEntries} session_index entries added, {failed} failed.',
+        exportConfirm: 'Export the full library ({count} sessions)?',
         migrationConfirm: 'Run migration for {scope} to "{target}"?',
         restoreConfirm: 'Restore sessions from backup "{backup}"?',
         repairConfirm: 'Repair missing SQLite and session_index records for the current session library?',
@@ -314,7 +333,8 @@ const dictionaries = {
       firstLineInvalidJson: '第一行不是合法 JSON。',
       firstLineNotSessionMeta: '第一行不是 session_meta 记录。',
       backupManifestMissing: '未找到备份清单：{path}',
-      missingQueryPath: '缺少必需的查询参数：path'
+      missingQueryPath: '缺少必需的查询参数：path',
+      exportSelectionEmpty: '当前导出范围没有匹配到任何会话。'
     },
     doctor: {
       invalidMeta: '第一条 JSONL 记录缺失，或无法解析为 session_meta。',
@@ -339,6 +359,7 @@ const dictionaries = {
         commandDoctor: '  doctor     检查无效或可疑的会话文件',
         commandBackups: '  backups    列出备份快照',
         commandMigrate: '  migrate    将会话重新标记到新的 provider',
+        commandExport: '  export     将会话导出为结构化文件',
         commandRepair: '  repair     重建缺失的 SQLite / session_index 索引',
         commandRestore: '  restore    从备份快照恢复会话',
         flagSessionsDir: '  --sessions-dir <path>   指定 Codex sessions 目录',
@@ -348,6 +369,7 @@ const dictionaries = {
         exampleServe: '  codex-migrate serve --open',
         exampleList: '  codex-migrate list --provider openai --limit 20',
         exampleMigrate: '  codex-migrate migrate --provider openai --target crs --dry-run',
+        exampleExport: '  codex-migrate export --provider codexmanager --format markdown',
         exampleRepair: '  codex-migrate repair',
         exampleRestore: '  codex-migrate restore --backup 20260328180102-migration-ab12cd --yes'
       },
@@ -371,6 +393,8 @@ const dictionaries = {
         range: '时间范围',
         noBackups: '尚未发现备份。',
         selectedSessions: '选中的会话',
+        exportFormat: '导出格式',
+        exportedFile: '导出文件',
         actionable: '可执行项',
         skipped: '跳过项',
         targetProvider: '目标 Provider',
@@ -397,7 +421,9 @@ const dictionaries = {
       },
       errors: {
         targetRequired: '执行 migrate 时必须提供 --target。',
-        backupRequired: '执行 restore 时必须提供 --backup。'
+        backupRequired: '执行 restore 时必须提供 --backup。',
+        exportFormatRequired: '执行 export 时必须提供 --format。',
+        exportFormatInvalid: '不支持的导出格式：{format}。'
       },
       table: {
         noSessions: '当前筛选条件下没有匹配的会话。',
@@ -423,6 +449,8 @@ const dictionaries = {
         expand: '展开',
         collapse: '收起',
         morePrompts: '还有 {count} 条',
+        previous: '上一条',
+        next: '下一条',
         backup: '备份',
         preRestoreBackup: '恢复前安全备份',
         noPreview: '暂无预览',
@@ -514,6 +542,14 @@ const dictionaries = {
         metadataHint: '路径只保留在这里，这样主表会更干净。',
         promptCount: '{count} 条提示词'
       },
+      export: {
+        scopeLabel: '导出当前范围',
+        formatLabel: '导出格式',
+        button: '导出',
+        buttonTitle: '导出当前选中项；如果没有选中项，则导出当前筛选结果',
+        success: '导出已准备好：{fileName}',
+        failed: '导出失败。'
+      },
       backups: {
         eyebrow: '备份',
         title: '可回滚时间点',
@@ -560,6 +596,7 @@ const dictionaries = {
       },
       busy: {
         loadingData: '正在刷新会话、备份和健康检查...',
+        exporting: '正在准备导出文件...',
         previewing: '正在准备迁移预览...',
         migrating: '正在执行迁移并写入安全备份...',
         restoring: '正在从所选备份恢复文件...',
@@ -575,6 +612,7 @@ const dictionaries = {
         migrationFinished: '迁移完成：{migrated} 个已迁移，{skipped} 个已跳过，{failed} 个失败。{backupSuffix}',
         restoreFinished: '恢复完成：{restored} 个已恢复，{failed} 个失败。{backupSuffix}',
         repairFinished: '修复完成：新增 {insertedThreads} 条线程记录，更新 {updatedThreads} 条线程记录，新增 {addedSessionIndexEntries} 条 session_index，失败 {failed} 条。',
+        exportConfirm: '确认导出整个会话库（共 {count} 个会话）吗？',
         migrationConfirm: '确认将 {scope} 迁移到 “{target}” 吗？',
         restoreConfirm: '确认从备份 “{backup}” 恢复会话吗？',
         repairConfirm: '确认修复当前会话库缺失的 SQLite 与 session_index 索引吗？',

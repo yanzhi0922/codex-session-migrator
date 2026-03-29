@@ -9,7 +9,7 @@
       content="Inspect, migrate, back up, and restore Codex sessions across model providers."
     >
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/styles.css?v=20260329a">
+    <link rel="stylesheet" href="/styles.css?v=20260329c">
   </head>
   <body>
     <div class="page-shell">
@@ -136,6 +136,14 @@
             </div>
           </div>
 
+          <div class="scope-tools" aria-label="Selection scope tools">
+            <label class="field compact-field scope-export-field" for="exportFormatSelect">
+              <span id="exportScopeLabel">Export scope</span>
+              <select id="exportFormatSelect"></select>
+            </label>
+            <button id="exportButton" class="button button-ghost scope-export-button" type="button">Export</button>
+          </div>
+
           <div id="busyNotice" class="busy-notice hidden" aria-live="polite"></div>
           <div id="previewPanel" class="preview-panel hidden"></div>
           <div id="messagePanel" class="message-panel hidden" aria-live="polite"></div>
@@ -226,15 +234,26 @@
             <p class="eyebrow" data-i18n="detail.eyebrow">Inspector</p>
             <h3 id="sessionDetailTitle" data-i18n="detail.title">Session details</h3>
           </div>
-          <button id="sessionDetailClose" class="button button-ghost detail-close" type="button">
-            <span aria-hidden="true">×</span>
-            <span data-i18n="common.close">Close</span>
-          </button>
+          <div class="detail-modal-actions">
+            <div class="detail-nav" aria-label="Session navigation">
+              <button id="sessionDetailPrev" class="button button-ghost detail-nav-button" type="button" aria-label="Previous session">
+                <span aria-hidden="true">←</span>
+              </button>
+              <span id="sessionDetailPosition" class="detail-nav-position">0 / 0</span>
+              <button id="sessionDetailNext" class="button button-ghost detail-nav-button" type="button" aria-label="Next session">
+                <span aria-hidden="true">→</span>
+              </button>
+            </div>
+            <button id="sessionDetailClose" class="button button-ghost detail-close" type="button">
+              <span aria-hidden="true">×</span>
+              <span data-i18n="common.close">Close</span>
+            </button>
+          </div>
         </div>
         <div id="sessionDetailBody" class="session-detail-body detail-modal-body"></div>
       </section>
     </div>
 
-    <script src="/app.js?v=20260329a"></script>
+    <script src="/app.js?v=20260329c"></script>
   </body>
 </html>

@@ -1,7 +1,7 @@
 {
   "name": "codex-session-migrator",
-  "version": "3.1.0",
-  "description": "A polished Codex session migration toolkit with a local web app, CLI, repair tools, backups, restore, and portable one-click desktop releases.",
+  "version": "3.2.0",
+  "description": "A polished Codex session migration toolkit with exports, repair tools, backups, restore, a local web app, CLI, and portable one-click desktop releases.",
   "main": "src/cli.js",
   "bin": {
     "codex-migrate": "src/cli.js"

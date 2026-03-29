@@ -258,6 +258,22 @@ select:disabled {
   border: 1px solid var(--border);
 }
 
+.scope-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.scope-export-field {
+  min-width: 220px;
+}
+
+.scope-export-button {
+  min-width: 132px;
+}
+
 .summary-card strong {
   display: block;
   margin-top: 8px;
@@ -516,6 +532,62 @@ select:disabled {
 
 .prompt-preview-cell {
   min-width: 420px;
+}
+
+.prompt-preview-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.78)),
+    rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(18, 36, 45, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.58);
+}
+
+.prompt-preview-card.is-empty {
+  color: var(--muted);
+}
+
+.prompt-preview-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.prompt-preview-badge,
+.prompt-preview-more-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.8rem;
+  padding: 0 0.7rem;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.prompt-preview-badge {
+  background: rgba(21, 91, 114, 0.11);
+  color: var(--primary);
+}
+
+.prompt-preview-more-badge {
+  background: rgba(18, 36, 45, 0.07);
+  color: var(--muted);
+}
+
+.prompt-preview-summary {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  color: var(--text);
+  line-height: 1.55;
+  word-break: break-word;
 }
 
 .session-workspace-cell {
@@ -840,6 +912,34 @@ select:disabled {
   padding: 0 14px;
 }
 
+.detail-modal-actions,
+.detail-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.detail-nav {
+  padding: 6px;
+  border-radius: 999px;
+  background: rgba(18, 36, 45, 0.05);
+  border: 1px solid rgba(18, 36, 45, 0.08);
+}
+
+.detail-nav-position {
+  min-width: 4.5rem;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.detail-nav-button {
+  min-height: 36px;
+  min-width: 44px;
+  padding: 0;
+}
+
 .detail-close span[aria-hidden="true"] {
   font-size: 1.3rem;
   line-height: 1;
@@ -1135,6 +1235,11 @@ select:disabled {
 
   .detail-modal-header {
     align-items: center;
+  }
+
+  .detail-modal-actions {
+    width: 100%;
+    justify-content: space-between;
   }
 
   .detail-summary-chips,

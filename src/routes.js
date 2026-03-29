@@ -1,6 +1,7 @@
 'use strict';
 
 const {
+  getDashboardData,
   getOverview,
   getProviders,
   getSessionDetail,
@@ -9,6 +10,7 @@ const {
   runDoctor,
   scanSessions
 } = require('./scanner');
+const { buildSessionExport } = require('./exporter');
 const {
   migrateSessions,
   previewMigration,
@@ -40,6 +42,21 @@ function sendError(res, statusCode, message, details) {
     error: message,
     details: details || null
   });
+}
+
+function sendDownload(res, statusCode, fileName, contentType, content) {
+  const buffer = Buffer.isBuffer(content) ? content : Buffer.from(String(content), 'utf8');
+
+  res.writeHead(statusCode, {
+    'Content-Type': contentType || 'application/octet-stream',
+    'Content-Length': buffer.length,
+    'Cache-Control': 'no-store',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Content-Disposition': `attachment; filename="${String(fileName || 'download').replace(/"/g, '')}"`
+  });
+  res.end(buffer);
 }
 
 function handleOptions(res) {
@@ -85,6 +102,14 @@ function parseListQuery(url) {
   };
 }
 
+function parseDashboardQuery(url) {
+  return {
+    ...parseListQuery(url),
+    includeDoctor: url.searchParams.get('includeDoctor') !== '0',
+    includeBackups: url.searchParams.get('includeBackups') !== '0'
+  };
+}
+
 function resolveRequestLocale(req, url, body = null) {
   return normalizeLocale(
     (body && body.lang) ||
@@ -127,16 +152,14 @@ function createRouter(sessionsDir) {
       }
 
       if (req.method === 'GET' && url.pathname === '/api/dashboard') {
-        const query = parseListQuery(url);
+        const query = parseDashboardQuery(url);
         sendJson(res, 200, {
           ok: true,
-          overview: getOverview(resolvedSessionsDir, { locale }),
-          sessions: scanSessions(resolvedSessionsDir, {
+          ...getDashboardData(resolvedSessionsDir, {
             ...query,
-            locale
-          }),
-          backups: listBackups(resolvedSessionsDir, { locale }),
-          doctor: runDoctor(resolvedSessionsDir, { locale, t })
+            locale,
+            t
+          })
         });
         return true;
       }
@@ -222,6 +245,27 @@ function createRouter(sessionsDir) {
             translator
           )
         });
+        return true;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/exports/download') {
+        const body = await readBody(req);
+        const requestLocale = resolveRequestLocale(req, url, body);
+        const translator = createTranslator(requestLocale);
+        const artifact = buildSessionExport(
+          resolvedSessionsDir,
+          body.selection || body,
+          body.format || 'markdown',
+          translator
+        );
+
+        sendDownload(
+          res,
+          200,
+          artifact.fileName,
+          artifact.contentType,
+          artifact.content
+        );
         return true;
       }
 
