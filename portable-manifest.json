@@ -1,0 +1,31 @@
+{
+  "appName": "Codex Session Migrator",
+  "version": "3.2.0",
+  "builtAt": "2026-03-29T07:33:46.262Z",
+  "nodeRuntime": {
+    "version": "v24.14.1",
+    "lts": "Krypton",
+    "files": [
+      "aix-ppc64",
+      "headers",
+      "linux-arm64",
+      "linux-ppc64le",
+      "linux-s390x",
+      "linux-x64",
+      "osx-arm64-tar",
+      "osx-x64-pkg",
+      "osx-x64-tar",
+      "src",
+      "win-arm64-7z",
+      "win-arm64-zip",
+      "win-x64-7z",
+      "win-x64-exe",
+      "win-x64-msi",
+      "win-x64-zip"
+    ]
+  },
+  "artifact": {
+    "folder": "Codex-Session-Migrator-3.2.0-windows-x64-portable",
+    "zipFile": "Codex-Session-Migrator-3.2.0-windows-x64-portable.zip"
+  }
+}

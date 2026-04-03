@@ -1,0 +1,196 @@
+{
+  "sessionFiles": 1261,
+  "uniqueSessionIds": 290,
+  "dbThreads": 325,
+  "missingInDbCount": 0,
+  "cwdMismatchCount": 63,
+  "missingSessionFileCount": 35,
+  "topMissingInDbByCwd": [],
+  "sampleMissingInDb": [],
+  "sampleCwdMismatch": [
+    {
+      "id": "019b193c-0ec5-7c73-8a91-a5b9115d2dac",
+      "sessionCwd": "c:\\Users\\Yanzh\\Desktop\\benchmark_iot",
+      "dbCwd": "C:\\Users\\Yanzh\\Desktop\\benchmark_iot"
+    },
+    {
+      "id": "019b193d-fc5f-7180-b48b-ecc9d0f244cb",
+      "sessionCwd": "c:\\Users\\Yanzh\\Desktop\\benchmark_iot",
+      "dbCwd": "C:\\Users\\Yanzh\\Desktop\\benchmark_iot"
+    },
+    {
+      "id": "019b386f-a6e7-7142-b323-3026f6d90dbc",
+      "sessionCwd": "c:\\Users\\Yanzh\\Desktop\\benchmark_iot",
+      "dbCwd": "C:\\Users\\Yanzh\\Desktop\\benchmark_iot"
+    },
+    {
+      "id": "019b3a84-8dbb-7673-8eea-ef6893187d49",
+      "sessionCwd": "c:\\Users\\Yanzh\\Desktop\\benchmark_iot",
+      "dbCwd": "C:\\Users\\Yanzh\\Desktop\\benchmark_iot"
+    },
+    {
+      "id": "019b4530-acf3-7411-93ea-1ca143764d1f",
+      "sessionCwd": "c:\\Users\\Yanzh\\Desktop\\benchmark_iot",
+      "dbCwd": "C:\\Users\\Yanzh\\Desktop\\benchmark_iot"
+    },
+    {
+      "id": "019b4b70-956a-75c2-ad6b-d160f9615d6b",
+      "sessionCwd": "c:\\Users\\Yanzh\\Desktop\\benchmark_iot",
+      "dbCwd": "C:\\Users\\Yanzh\\Desktop\\benchmark_iot"
+    },
+    {
+      "id": "019b4bba-2e49-75d2-9cb1-9b3f53174f39",
+      "sessionCwd": "c:\\Users\\Yanzh\\Desktop\\benchmark_iot",
+      "dbCwd": "C:\\Users\\Yanzh\\Desktop\\benchmark_iot"
+    },
+    {
+      "id": "019b50d0-8332-75e2-8122-8de4a98fa50b",
+      "sessionCwd": "c:\\Users\\Yanzh\\Desktop\\benchmark_iot",
+      "dbCwd": "C:\\Users\\Yanzh\\Desktop\\benchmark_iot"
+    },
+    {
+      "id": "019b6625-aff9-7322-b6f6-6e42324e72d7",
+      "sessionCwd": "c:\\Users\\Yanzh\\Desktop\\benchmark_iot",
+      "dbCwd": "C:\\Users\\Yanzh\\Desktop\\benchmark_iot"
+    },
+    {
+      "id": "019b6918-16d4-75c3-9576-b92c9efaa775",
+      "sessionCwd": "c:\\Users\\Yanzh\\Desktop\\benchmark_iot",
+      "dbCwd": "C:\\Users\\Yanzh\\Desktop\\benchmark_iot"
+    },
+    {
+      "id": "019ba342-1949-70e3-b31f-7d5233821658",
+      "sessionCwd": "c:\\Users\\Yanzh\\Desktop\\benchmark_iot",
+      "dbCwd": "C:\\Users\\Yanzh\\Desktop\\benchmark_iot"
+    },
+    {
+      "id": "019bb8ac-9e43-72d3-81aa-431c24bba784",
+      "sessionCwd": "c:\\Users\\Yanzh\\Desktop\\benchmark_iot",
+      "dbCwd": "C:\\Users\\Yanzh\\Desktop\\benchmark_iot"
+    },
+    {
+      "id": "019bbec7-cfb7-7b72-88db-8fe60022b61c",
+      "sessionCwd": "c:\\Users\\Yanzh\\Desktop\\benchmark_iot",
+      "dbCwd": "C:\\Users\\Yanzh\\Desktop\\benchmark_iot"
+    },
+    {
+      "id": "019bbec7-e581-7fb0-928c-12b8f74bd0d5",
+      "sessionCwd": "c:\\Users\\Yanzh\\Desktop\\benchmark_iot",
+      "dbCwd": "C:\\Users\\Yanzh\\Desktop\\benchmark_iot"
+    },
+    {
+      "id": "019bc1e2-aea5-7cc1-9998-486e6ebbbef2",
+      "sessionCwd": "c:\\Users\\Yanzh\\Desktop\\benchmark_iot",
+      "dbCwd": "C:\\Users\\Yanzh\\Desktop\\benchmark_iot"
+    },
+    {
+      "id": "019bc1e2-d26a-79e1-a19e-f45f54ff009d",
+      "sessionCwd": "c:\\Users\\Yanzh\\Desktop\\benchmark_iot",
+      "dbCwd": "C:\\Users\\Yanzh\\Desktop\\benchmark_iot"
+    },
+    {
+      "id": "019bd377-a5a6-7a91-9c3c-5babec055be8",
+      "sessionCwd": "c:\\Users\\Yanzh\\Desktop\\benchmark_iot",
+      "dbCwd": "C:\\Users\\Yanzh\\Desktop\\benchmark_iot"
+    },
+    {
+      "id": "019bd377-baac-7ef2-b989-e82def07e132",
+      "sessionCwd": "c:\\Users\\Yanzh\\Desktop\\benchmark_iot",
+      "dbCwd": "C:\\Users\\Yanzh\\Desktop\\benchmark_iot"
+    },
+    {
+      "id": "019bd578-0ef4-71f1-a996-25d0b2a9246c",
+      "sessionCwd": "c:\\Users\\Yanzh\\Desktop\\benchmark_iot",
+      "dbCwd": "C:\\Users\\Yanzh\\Desktop\\benchmark_iot"
+    },
+    {
+      "id": "019bd578-266a-7721-a9eb-3a93bce0b6fc",
+      "sessionCwd": "c:\\Users\\Yanzh\\Desktop\\benchmark_iot",
+      "dbCwd": "C:\\Users\\Yanzh\\Desktop\\benchmark_iot"
+    },
+    {
+      "id": "019bfeb3-1e11-7030-b5f4-f95593d4e304",
+      "sessionCwd": "c:\\Users\\Yanzh\\Desktop\\yz_gzy",
+      "dbCwd": "C:\\Users\\Yanzh\\Desktop\\yz_gzy"
+    },
+    {
+      "id": "019bfeb3-ee64-71b2-96c3-330d15cdaa7e",
+      "sessionCwd": "c:\\Users\\Yanzh\\Desktop\\yz_gzy",
+      "dbCwd": "C:\\Users\\Yanzh\\Desktop\\yz_gzy"
+    },
+    {
+      "id": "019c191c-d7ec-70e3-9d19-3e0b7466a5fe",
+      "sessionCwd": "c:\\Users\\Yanzh\\Desktop\\benchmark_iot",
+      "dbCwd": "C:\\Users\\Yanzh\\Desktop\\benchmark_iot"
+    },
+    {
+      "id": "019c1aea-8f67-7750-9975-88a86fd3b778",
+      "sessionCwd": "c:\\Users\\Yanzh\\Desktop\\benchmark_iot",
+      "dbCwd": "C:\\Users\\Yanzh\\Desktop\\benchmark_iot"
+    },
+    {
+      "id": "019c1c62-194d-72a0-bcaf-c677167cb0fd",
+      "sessionCwd": "c:\\Users\\Yanzh\\Desktop\\benchmark_iot",
+      "dbCwd": "C:\\Users\\Yanzh\\Desktop\\benchmark_iot"
+    },
+    {
+      "id": "019c201f-6e15-7432-ab03-2b2fe680aff4",
+      "sessionCwd": "c:\\Users\\Yanzh\\Desktop\\benchmark_iot",
+      "dbCwd": "C:\\Users\\Yanzh\\Desktop\\benchmark_iot"
+    },
+    {
+      "id": "019c2373-4c48-7451-a11b-062a5b30c740",
+      "sessionCwd": "c:\\Users\\Yanzh\\Desktop\\benchmark_iot",
+      "dbCwd": "C:\\Users\\Yanzh\\Desktop\\benchmark_iot"
+    },
+    {
+      "id": "019c273a-0357-70a1-80ba-cb33bc78bd03",
+      "sessionCwd": "c:\\Users\\Yanzh\\Desktop\\benchmark_iot",
+      "dbCwd": "C:\\Users\\Yanzh\\Desktop\\benchmark_iot"
+    },
+    {
+      "id": "019c27b1-624a-7813-857b-b1db2b5da450",
+      "sessionCwd": "c:\\Users\\Yanzh\\Desktop\\benchmark_iot",
+      "dbCwd": "C:\\Users\\Yanzh\\Desktop\\benchmark_iot"
+    },
+    {
+      "id": "019c290b-5c63-7662-80bd-ea499d0220ac",
+      "sessionCwd": "c:\\Users\\Yanzh\\Desktop\\benchmark_iot",
+      "dbCwd": "C:\\Users\\Yanzh\\Desktop\\benchmark_iot"
+    }
+  ],
+  "topMissingSessionFileByCwd": [
+    [
+      "C:\\Users\\Yanzh\\Desktop\\benchmark_iot",
+      15
+    ],
+    [
+      "C:\\Users\\Yanzh\\Desktop\\traffic morphing",
+      7
+    ],
+    [
+      "C:\\Users\\Yanzh\\Desktop\\openclaw",
+      4
+    ],
+    [
+      "C:\\Users\\Yanzh\\Desktop\\yz_gzy",
+      2
+    ],
+    [
+      "C:\\Users\\Yanzh\\Desktop\\AI瀛︿範鍒涗綔",
+      2
+    ],
+    [
+      "C:\\Users\\Yanzh\\Desktop\\yz\\genXlH",
+      2
+    ],
+    [
+      "C:\\Users\\Yanzh\\Desktop",
+      2
+    ],
+    [
+      "C:\\Users\\Yanzh\\Desktop\\yz",
+      1
+    ]
+  ]
+}

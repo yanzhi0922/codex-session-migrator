@@ -1,0 +1,15 @@
+Codex Session Migrator
+Version: 3.2.0
+Bundled Node runtime: v24.14.1
+
+Quick start
+1. Double-click "Codex Session Migrator.cmd"
+2. Keep that window open while you use the browser UI
+3. If migrated sessions are still invisible in CodexManager, run "Repair Codex Indexes.cmd"
+4. If Codex Desktop is stuck on "thinking/processing", run "Codex Desktop One-Click Self Heal.cmd"
+
+Included launchers
+- Codex Session Migrator.cmd : starts the local web app and opens your browser
+- codex-migrate.cmd          : CLI wrapper with a no-flash double-click menu
+- Repair Codex Indexes.cmd   : rebuilds missing thread indexes and runs a health check
+- Codex Desktop One-Click Self Heal.cmd : backs up desktop cache state, clears stale cache, and restarts Codex Desktop

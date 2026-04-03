@@ -1,9 +1,0 @@
-node_modules/
-dist/
-__backups__/
-*.log
-.env
-*.tmp
-*.tgz
-.DS_Store
-Thumbs.db

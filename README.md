@@ -54,7 +54,7 @@ The packaged desktop build:
 - opens the local app automatically in your browser
 - targets `~/.codex/sessions` by default
 - includes repair, migration, backup, restore, and health-check tools
-- includes dedicated one-click launchers for the browser UI, CLI, and index repair
+- includes dedicated one-click launchers for the browser UI, CLI, index repair, and desktop self-heal
 - lets you double-click `codex-migrate.cmd` safely without the window flashing closed
 
 ### Developers
@@ -62,6 +62,7 @@ The packaged desktop build:
 ```bash
 git clone https://github.com/yanzhi0922/codex-session-migrator.git
 cd codex-session-migrator
+cd app
 npm install
 npm start
 ```
@@ -128,6 +129,28 @@ codex-migrate repair
 ```
 
 `repair` now also refreshes `session_index.jsonl` and reports sessions that are still missing a usable workspace path.
+
+### Recover a stuck Codex Desktop (Windows)
+
+If Codex Desktop stays on a long-running "thinking" or "processing" state, run:
+
+```text
+Codex Desktop One-Click Self Heal.cmd
+```
+
+This launcher will:
+
+- stop only Codex Desktop processes (`Codex.exe` / `codex.exe`)
+- back up desktop cache state (`Local Storage`, `Session Storage`, `IndexedDB`)
+- clear stale cache state and restart Codex Desktop
+
+It does **not** modify `~/.codex/sessions`, and it does **not** stop `CodexManager.exe`.
+
+Backup snapshots are written to:
+
+```text
+~/.codex/self-heal-backups/
+```
 
 ### Preview a migration
 
@@ -206,12 +229,14 @@ Requirements:
 Run tests:
 
 ```bash
+cd app
 npm test
 ```
 
 Build a portable Windows release:
 
 ```bash
+cd app
 npm ci
 npm run build:release:win
 ```
@@ -231,24 +256,30 @@ Current test coverage includes:
 ## Project structure
 
 ```text
-public/
-  app.js
-  favicon.svg
-  index.html
-  styles.css
-src/
-  backup-store.js
-  cli.js
-  format.js
-  migrator.js
-  routes.js
-  scanner.js
-  server.js
-test/
-  helpers.js
-  migrator.test.js
-  scanner.test.js
-  server.test.js
+app/
+  package.json
+  public/
+    app.js
+    index.html
+    styles.css
+  runtime/
+    node.exe
+    npm.cmd
+    npx.cmd
+  src/
+    cli.js
+    migrator.js
+    session-indexes.js
+    server.js
+    routes.js
+  test/
+    migrator.test.js
+    prompt-utils.test.js
+    session-indexes.test.js
+Codex Session Migrator.cmd
+codex-migrate.cmd
+Repair Codex Indexes.cmd
+Codex Desktop One-Click Self Heal.cmd
 ```
 
 ## License
